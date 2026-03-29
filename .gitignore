@@ -1,0 +1,13 @@
+build/
+.vs/
+*.obj
+*.lib
+*.exe
+*.pdb
+*.ilk
+*.suo
+*.user
+CMakeSettings.json
+out/
+roms/
+*.zip
