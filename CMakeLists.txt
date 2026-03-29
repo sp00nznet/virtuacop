@@ -9,12 +9,17 @@ set(MODEL2RECOMP_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 add_subdirectory(ext/model2recomp)
 
 # --- Recompiled game code library ---
+# Collect all generated recomp source files
+file(GLOB VCOP_RECOMP_SOURCES src/recomp/vcop_code_*.c)
+
 add_library(vcop_game STATIC
-    src/recomp/vcop_stubs.c
+    src/recomp/vcop_register.c
+    ${VCOP_RECOMP_SOURCES}
 )
 
 target_include_directories(vcop_game
     PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/recomp
 )
 
 target_link_libraries(vcop_game

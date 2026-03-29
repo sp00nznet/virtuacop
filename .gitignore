@@ -11,3 +11,4 @@ CMakeSettings.json
 out/
 roms/
 *.zip
+__pycache__/
