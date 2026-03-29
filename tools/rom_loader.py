@@ -420,66 +420,73 @@ def disasm_one(data, offset, addr):
         inst_size = 4
         addr_str = ''
 
-        if mode == 0x0:
-            # offset
-            offset_val = word & 0xFFF
-            addr_str = f'0x{offset_val:X}({abase_str})'
-        elif mode == 0x4:
-            # (abase)
-            addr_str = f'({abase_str})'
-        elif mode == 0x5:
-            # disp32
-            if offset + 8 <= len(data):
-                disp = struct.unpack_from('<I', data, offset + 4)[0]
-                inst_size = 8
-                addr_str = f'0x{disp:08X}'
+        if not (word & 0x1000):
+            # MEMA format: 13-bit offset, optional abase
+            mem_offset = word & 0x1FFF
+            if word & 0x2000:
+                addr_str = f'0x{mem_offset:X}({abase_str})'
             else:
-                addr_str = '???'
-                inst_size = 8
-        elif mode == 0x7:
-            # disp32(abase)
-            if offset + 8 <= len(data):
-                disp = struct.unpack_from('<I', data, offset + 4)[0]
-                inst_size = 8
-                addr_str = f'0x{disp:08X}({abase_str})'
-            else:
-                addr_str = '???'
-                inst_size = 8
-        elif mode == 0xC:
-            # index(abase)
+                addr_str = f'0x{mem_offset:X}'
+        else:
+            # MEMB format
             index = word & 0x1F
             index_str = REG_NAMES.get(index, f'r{index}')
             scale = (word >> 7) & 0x7
             scale_val = 1 << scale if scale else 1
-            addr_str = f'({abase_str})[{index_str}*{scale_val}]'
-        elif mode == 0xD:
-            # disp32[index*scale]
-            if offset + 8 <= len(data):
-                disp = struct.unpack_from('<I', data, offset + 4)[0]
-                index = word & 0x1F
-                index_str = REG_NAMES.get(index, f'r{index}')
-                scale = (word >> 7) & 0x7
-                scale_val = 1 << scale if scale else 1
-                inst_size = 8
-                addr_str = f'0x{disp:08X}[{index_str}*{scale_val}]'
+
+            if mode == 0x4:
+                addr_str = f'({abase_str})'
+            elif mode == 0x5:
+                # IP-relative: disp32 + addr_of_next_instruction
+                if offset + 8 <= len(data):
+                    disp = struct.unpack_from('<I', data, offset + 4)[0]
+                    target_addr = disp + (addr + 8)
+                    inst_size = 8
+                    addr_str = f'0x{target_addr:08X}'
+                else:
+                    addr_str = '???'
+                    inst_size = 8
+            elif mode == 0x7:
+                # abase + index*scale (4-byte, no disp)
+                addr_str = f'({abase_str})[{index_str}*{scale_val}]'
+            elif mode == 0xC:
+                # absolute disp32 (8-byte)
+                if offset + 8 <= len(data):
+                    disp = struct.unpack_from('<I', data, offset + 4)[0]
+                    inst_size = 8
+                    addr_str = f'0x{disp:08X}'
+                else:
+                    addr_str = '???'
+                    inst_size = 8
+            elif mode == 0xD:
+                # disp32 + abase (8-byte)
+                if offset + 8 <= len(data):
+                    disp = struct.unpack_from('<I', data, offset + 4)[0]
+                    inst_size = 8
+                    addr_str = f'0x{disp:08X}({abase_str})'
+                else:
+                    addr_str = '???'
+                    inst_size = 8
+            elif mode == 0xE:
+                # disp32 + index*scale (8-byte)
+                if offset + 8 <= len(data):
+                    disp = struct.unpack_from('<I', data, offset + 4)[0]
+                    inst_size = 8
+                    addr_str = f'0x{disp:08X}[{index_str}*{scale_val}]'
+                else:
+                    addr_str = '???'
+                    inst_size = 8
+            elif mode == 0xF:
+                # disp32 + abase + index*scale (8-byte)
+                if offset + 8 <= len(data):
+                    disp = struct.unpack_from('<I', data, offset + 4)[0]
+                    inst_size = 8
+                    addr_str = f'0x{disp:08X}({abase_str})[{index_str}*{scale_val}]'
+                else:
+                    addr_str = '???'
+                    inst_size = 8
             else:
-                addr_str = '???'
-                inst_size = 8
-        elif mode == 0xE:
-            # disp32(abase)[index*scale]
-            if offset + 8 <= len(data):
-                disp = struct.unpack_from('<I', data, offset + 4)[0]
-                index = word & 0x1F
-                index_str = REG_NAMES.get(index, f'r{index}')
-                scale = (word >> 7) & 0x7
-                scale_val = 1 << scale if scale else 1
-                inst_size = 8
-                addr_str = f'0x{disp:08X}({abase_str})[{index_str}*{scale_val}]'
-            else:
-                addr_str = '???'
-                inst_size = 8
-        else:
-            addr_str = f'mode{mode:X}({abase_str})'
+                addr_str = f'mode{mode:X}({abase_str})'
 
         is_call = (opcode == 0x86)  # callx
         is_branch = (opcode == 0x84)  # bx

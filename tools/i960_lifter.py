@@ -71,10 +71,10 @@ class I960Lifter:
             opcode = (word >> 24) & 0xFF
             inst_size = 4
 
-            # Check for 8-byte instructions (MEM format with displacement)
-            if 0x80 <= opcode <= 0xCF:
+            # Check for 8-byte instructions (MEMB format with displacement)
+            if 0x80 <= opcode <= 0xCF and (word & 0x1000):
                 mode = (word >> 10) & 0xF
-                if mode in (0x5, 0x7, 0xD, 0xE):
+                if mode in (0x5, 0xC, 0xD, 0xE, 0xF):  # modes with disp32
                     inst_size = 8
 
             # Find branch targets
@@ -107,17 +107,10 @@ class I960Lifter:
             if addr in local_labels:
                 lines.append(f'L_{addr:08X}:')
 
-            c_code = self._lift_instruction(word, addr)
+            c_code, inst_size = self._lift_instruction(word, addr)
             if c_code:
                 for line in c_code:
                     lines.append(f'    {line}')
-
-            # Determine instruction size
-            inst_size = 4
-            if 0x80 <= opcode <= 0xCF:
-                mode = (word >> 10) & 0xF
-                if mode in (0x5, 0x7, 0xD, 0xE):
-                    inst_size = 8
 
             offset += inst_size
 
@@ -129,9 +122,10 @@ class I960Lifter:
         return lines
 
     def _lift_instruction(self, word, addr):
-        """Lift a single instruction to C code. Returns list of C lines."""
+        """Lift a single instruction to C code. Returns (list of C lines, inst_size)."""
         opcode = (word >> 24) & 0xFF
         lines = []
+        ret_size = 4  # default, updated for 8-byte MEM instructions
 
         # ---- CTRL format ----
         if 0x08 <= opcode <= 0x1F:
@@ -168,7 +162,7 @@ class I960Lifter:
                 lines.append(f'/* bo 0x{target:08X} - branch if ordered */')
             else:
                 lines.append(f'/* TODO: ctrl opcode 0x{opcode:02X} target 0x{target:08X} */')
-            return lines
+            return lines, ret_size
 
         # ---- COBR format ----
         if 0x20 <= opcode <= 0x3F:
@@ -223,7 +217,7 @@ class I960Lifter:
                 lines.append(f'if (i960_test_cc(COND_LE)) goto L_{target:08X}; /* cmpible */')
             else:
                 lines.append(f'/* TODO: COBR opcode 0x{opcode:02X} */')
-            return lines
+            return lines, ret_size
 
         # ---- REG format ----
         if 0x58 <= opcode <= 0x7F:
@@ -240,171 +234,222 @@ class I960Lifter:
 
             key = (opcode, ext)
 
-            # Arithmetic
-            if key == (0x59, 0x00):  # addo
-                lines.append(f'{dst} = op_addo({src1}, {src2}); /* addo */')
-            elif key == (0x59, 0x01):  # addi
-                lines.append(f'{dst} = op_addi({src1}, {src2}); /* addi */')
-            elif key == (0x59, 0x02):  # subo
-                lines.append(f'{dst} = op_subo({src1}, {src2}); /* subo */')
-            elif key == (0x59, 0x03):  # subi
-                lines.append(f'{dst} = op_subi({src1}, {src2}); /* subi */')
-            elif key == (0x67, 0x00):  # mulo
-                lines.append(f'{dst} = op_mulo({src1}, {src2}); /* mulo */')
-            elif key == (0x67, 0x01):  # muli
-                lines.append(f'{dst} = (uint32_t)((int32_t){src1} * (int32_t){src2}); /* muli */')
-            elif key == (0x66, 0x00):  # divo
-                lines.append(f'{dst} = op_divo({src1}, {src2}); /* divo */')
-            elif key == (0x66, 0x01):  # divi
-                lines.append(f'{dst} = ({src1} != 0) ? (uint32_t)((int32_t){src2} / (int32_t){src1}) : 0; /* divi */')
-            elif key == (0x65, 0x00):  # remo
-                lines.append(f'{dst} = op_remo({src1}, {src2}); /* remo */')
+            # ---- 0x58: logical operations ----
+            if key == (0x58, 0x00):    lines.append(f'{dst} = {src2} ^ (1u << ({src1} & 31)); /* notbit */')
+            elif key == (0x58, 0x01):  lines.append(f'{dst} = {src1} & {src2}; /* and */')
+            elif key == (0x58, 0x02):  lines.append(f'{dst} = {src2} & ~{src1}; /* andnot */')
+            elif key == (0x58, 0x03):  lines.append(f'{dst} = {src2} | (1u << ({src1} & 31)); /* setbit */')
+            elif key == (0x58, 0x04):  lines.append(f'{dst} = ~{src2} & {src1}; /* notand */')
+            elif key == (0x58, 0x06):  lines.append(f'{dst} = {src1} ^ {src2}; /* xor */')
+            elif key == (0x58, 0x07):  lines.append(f'{dst} = {src1} | {src2}; /* or */')
+            elif key == (0x58, 0x08):  lines.append(f'{dst} = ~({src1} | {src2}); /* nor */')
+            elif key == (0x58, 0x09):  lines.append(f'{dst} = ~({src1} ^ {src2}); /* xnor */')
+            elif key == (0x58, 0x0A):  lines.append(f'{dst} = ~{src1}; /* not */')
+            elif key == (0x58, 0x0B):  lines.append(f'{dst} = {src2} | ~{src1}; /* ornot */')
+            elif key == (0x58, 0x0C):  lines.append(f'{dst} = {src2} & ~(1u << ({src1} & 31)); /* clrbit */')
+            elif key == (0x58, 0x0D):  lines.append(f'{dst} = ~{src2} | {src1}; /* notor */')
+            elif key == (0x58, 0x0E):  lines.append(f'{dst} = ~({src1} & {src2}); /* nand */')
+            elif key == (0x58, 0x0F):  lines.append(f'{dst} = ({src2} & ~(1u << ({src1} & 31))) | (({dst} & 1) << ({src1} & 31)); /* alterbit */')
 
-            # Logical
-            elif key == (0x58, 0x01):  # and
-                lines.append(f'{dst} = op_and({src1}, {src2}); /* and */')
-            elif key == (0x58, 0x02):  # andnot
-                lines.append(f'{dst} = op_andnot({src1}, {src2}); /* andnot */')
-            elif key == (0x58, 0x06):  # xor
-                lines.append(f'{dst} = op_xor({src1}, {src2}); /* xor */')
-            elif key == (0x58, 0x07):  # or
-                lines.append(f'{dst} = op_or({src1}, {src2}); /* or */')
-            elif key == (0x58, 0x0A):  # not
-                lines.append(f'{dst} = op_not({src1}); /* not */')
-            elif key == (0x58, 0x04):  # notand
-                lines.append(f'{dst} = op_notand({src1}, {src2}); /* notand */')
-            elif key == (0x58, 0x0B):  # ornot
-                lines.append(f'{dst} = op_ornot({src1}, {src2}); /* ornot */')
-            elif key == (0x58, 0x0D):  # notor
-                lines.append(f'{dst} = op_notor({src1}, {src2}); /* notor */')
-            elif key == (0x58, 0x0E):  # nand
-                lines.append(f'{dst} = ~({src1} & {src2}); /* nand */')
-            elif key == (0x58, 0x08):  # nor
-                lines.append(f'{dst} = ~({src1} | {src2}); /* nor */')
-            elif key == (0x58, 0x09):  # xnor
-                lines.append(f'{dst} = ~({src1} ^ {src2}); /* xnor */')
+            # ---- 0x59: arithmetic + shifts ----
+            elif key == (0x59, 0x00):  lines.append(f'{dst} = {src1} + {src2}; /* addo */')
+            elif key == (0x59, 0x01):  lines.append(f'{dst} = {src1} + {src2}; /* addi */')
+            elif key == (0x59, 0x02):  lines.append(f'{dst} = {src2} - {src1}; /* subo */')
+            elif key == (0x59, 0x03):  lines.append(f'{dst} = {src2} - {src1}; /* subi */')
+            elif key == (0x59, 0x08):  lines.append(f'{dst} = op_shro({src1}, {src2}); /* shro */')
+            elif key == (0x59, 0x0A):  lines.append(f'/* shrdi - TODO */')
+            elif key == (0x59, 0x0B):  lines.append(f'{dst} = (uint32_t)((int32_t){src2} >> ({src1} & 31)); /* shri */')
+            elif key == (0x59, 0x0C):  lines.append(f'{dst} = op_shlo({src1}, {src2}); /* shlo */')
+            elif key == (0x59, 0x0D):  lines.append(f'{dst} = op_rotate({src1}, {src2}); /* rotate */')
+            elif key == (0x59, 0x0E):  lines.append(f'{dst} = op_shlo({src1}, {src2}); /* shli */')
 
-            # Shifts
-            elif key == (0x59, 0x0C):  # shlo
-                lines.append(f'{dst} = op_shlo({src1}, {src2}); /* shlo */')
-            elif key == (0x59, 0x08):  # shro
-                lines.append(f'{dst} = op_shro({src1}, {src2}); /* shro */')
-            elif key == (0x59, 0x0B):  # shri
-                lines.append(f'{dst} = (uint32_t)op_shri({src1}, (int32_t){src2}); /* shri */')
-            elif key == (0x59, 0x0D):  # rotate
-                lines.append(f'{dst} = op_rotate({src1}, {src2}); /* rotate */')
+            # ---- 0x5A: compare ----
+            elif key == (0x5A, 0x00):  lines.append(f'op_cmpo({src1}, {src2}); /* cmpo */')
+            elif key == (0x5A, 0x01):  lines.append(f'op_cmpi((int32_t){src1}, (int32_t){src2}); /* cmpi */')
+            elif key == (0x5A, 0x02):  lines.append(f'op_cmpo({src1}, {src2}); /* concmpo */')
+            elif key == (0x5A, 0x03):  lines.append(f'op_cmpi((int32_t){src1}, (int32_t){src2}); /* concmpi */')
+            elif key == (0x5A, 0x04):  lines.append(f'op_cmpo({src1}, {src2}); {dst} = {src2} + 1; /* cmpinco */')
+            elif key == (0x5A, 0x05):  lines.append(f'op_cmpi((int32_t){src1}, (int32_t){src2}); {dst} = {src2} + 1; /* cmpinci */')
+            elif key == (0x5A, 0x06):  lines.append(f'op_cmpo({src1}, {src2}); {dst} = {src2} - 1; /* cmpdeco */')
+            elif key == (0x5A, 0x07):  lines.append(f'op_cmpi((int32_t){src1}, (int32_t){src2}); {dst} = {src2} - 1; /* cmpdeci */')
+            elif key == (0x5A, 0x0E):  lines.append(f'op_chkbit({src1}, {src2}); /* chkbit */')
 
-            # Bit operations
-            elif key == (0x58, 0x03):  # setbit
-                lines.append(f'{dst} = op_setbit({src1}, {src2}); /* setbit */')
-            elif key == (0x58, 0x0C):  # clrbit
-                lines.append(f'{dst} = op_clrbit({src1}, {src2}); /* clrbit */')
-            elif key == (0x58, 0x00):  # notbit
-                lines.append(f'{dst} = {src2} ^ (1u << ({src1} & 31)); /* notbit */')
+            # ---- 0x5C: mov ----
+            elif key == (0x5C, 0x0C):  lines.append(f'{dst} = {src1}; /* mov */')
 
-            # Compare
-            elif key == (0x5A, 0x00):  # cmpo
-                lines.append(f'op_cmpo({src1}, {src2}); /* cmpo */')
-            elif key == (0x5A, 0x01):  # cmpi
-                lines.append(f'op_cmpi((int32_t){src1}, (int32_t){src2}); /* cmpi */')
-            elif key == (0x5A, 0x04):  # cmpinco
-                lines.append(f'op_cmpo({src1}, {src2}); {dst} = {src2} + 1; /* cmpinco */')
-            elif key == (0x5A, 0x05):  # cmpinci
-                lines.append(f'op_cmpi((int32_t){src1}, (int32_t){src2}); {dst} = {src2} + 1; /* cmpinci */')
-            elif key == (0x5A, 0x06):  # cmpdeco
-                lines.append(f'op_cmpo({src1}, {src2}); {dst} = {src2} - 1; /* cmpdeco */')
-            elif key == (0x5A, 0x07):  # cmpdeci
-                lines.append(f'op_cmpi((int32_t){src1}, (int32_t){src2}); {dst} = {src2} - 1; /* cmpdeci */')
+            # ---- 0x5D: movl (64-bit move, register pair) ----
+            elif key == (0x5D, 0x0C):
+                dst_pair = dst_reg & 0x1E
+                src1_pair = src1_reg & 0x1E
+                lines.append(f'g_i960.r[{dst_pair}] = g_i960.r[{src1_pair}]; g_i960.r[{dst_pair}+1] = g_i960.r[{src1_pair}+1]; /* movl */')
 
-            # Move
-            elif key == (0x5C, 0x00):  # mov
-                lines.append(f'{dst} = {src1}; /* mov */')
+            # ---- 0x5E: movt (96-bit move, register triple) ----
+            elif key == (0x5E, 0x0C):
+                dst_triple = dst_reg & 0x1C
+                src1_triple = src1_reg & 0x1C
+                lines.append(f'g_i960.r[{dst_triple}] = g_i960.r[{src1_triple}]; g_i960.r[{dst_triple}+1] = g_i960.r[{src1_triple}+1]; g_i960.r[{dst_triple}+2] = g_i960.r[{src1_triple}+2]; /* movt */')
 
-            # Test
-            elif key == (0x5F, 0x02):  # teste
-                lines.append(f'{dst} = op_teste(); /* teste */')
-            elif key == (0x5F, 0x05):  # testne
-                lines.append(f'{dst} = op_testne(); /* testne */')
-            elif key == (0x5F, 0x04):  # testl
-                lines.append(f'{dst} = op_testl(); /* testl */')
-            elif key == (0x5F, 0x06):  # testle
-                lines.append(f'{dst} = op_testle(); /* testle */')
-            elif key == (0x5F, 0x01):  # testg
-                lines.append(f'{dst} = op_testg(); /* testg */')
-            elif key == (0x5F, 0x03):  # testge
-                lines.append(f'{dst} = op_testge(); /* testge */')
+            # ---- 0x5F: movq (128-bit) / test ----
+            elif key == (0x5F, 0x0C):
+                dst_quad = dst_reg & 0x1C
+                src1_quad = src1_reg & 0x1C
+                lines.append(f'g_i960.r[{dst_quad}] = g_i960.r[{src1_quad}]; g_i960.r[{dst_quad}+1] = g_i960.r[{src1_quad}+1]; g_i960.r[{dst_quad}+2] = g_i960.r[{src1_quad}+2]; g_i960.r[{dst_quad}+3] = g_i960.r[{src1_quad}+3]; /* movq */')
+            elif key == (0x5F, 0x00):  lines.append(f'{dst} = 0; /* testno (always false) */')
+            elif key == (0x5F, 0x01):  lines.append(f'{dst} = op_testg(); /* testg */')
+            elif key == (0x5F, 0x02):  lines.append(f'{dst} = op_teste(); /* teste */')
+            elif key == (0x5F, 0x03):  lines.append(f'{dst} = op_testge(); /* testge */')
+            elif key == (0x5F, 0x04):  lines.append(f'{dst} = op_testl(); /* testl */')
+            elif key == (0x5F, 0x05):  lines.append(f'{dst} = op_testne(); /* testne */')
+            elif key == (0x5F, 0x06):  lines.append(f'{dst} = op_testle(); /* testle */')
+            elif key == (0x5F, 0x07):  lines.append(f'{dst} = 1; /* testo (always true) */')
 
-            # modac
-            elif key == (0x60, 0x05):  # modac
+            # ---- 0x60: synmov/synmovl/synmovq ----
+            elif key == (0x60, 0x00):
+                lines.append(f'bus_write32({src1}, bus_read32({src2})); /* synmov */')
+            elif key == (0x60, 0x02):
+                lines.append(f'bus_write32({src1}, bus_read32({src2})); bus_write32({src1}+4, bus_read32({src2}+4)); bus_write32({src1}+8, bus_read32({src2}+8)); bus_write32({src1}+12, bus_read32({src2}+12)); /* synmovq */')
+
+            # ---- 0x64: spanbit, scanbit, modac ----
+            elif key == (0x64, 0x00):
+                lines.append(f'{{ uint32_t _v = {src1}; {dst} = 0xFFFFFFFF; for (int _i = 31; _i >= 0; _i--) {{ if (!(_v & (1u << _i))) {{ {dst} = _i; break; }} }} }} /* spanbit */')
+            elif key == (0x64, 0x01):
+                lines.append(f'{{ uint32_t _v = {src1}; {dst} = 0xFFFFFFFF; for (int _i = 31; _i >= 0; _i--) {{ if (_v & (1u << _i)) {{ {dst} = _i; break; }} }} }} /* scanbit */')
+            elif key == (0x64, 0x05):
                 lines.append(f'{dst} = g_i960.AC; g_i960.AC = (g_i960.AC & ~{src1}) | ({src2} & {src1}); /* modac */')
 
-            # Floating point
-            elif key == (0x68, 0x01):  # addr (float add)
-                lines.append(f'/* addr fp */')
-            elif key == (0x69, 0x01):  # subr
-                lines.append(f'/* subr fp */')
-            elif key == (0x69, 0x05):  # mulr
-                lines.append(f'/* mulr fp */')
-            elif key == (0x6A, 0x01):  # divr
-                lines.append(f'/* divr fp */')
-            elif key == (0x68, 0x05):  # movr
-                lines.append(f'/* movr fp */')
-            elif key == (0x6C, 0x09):  # cvtir
-                lines.append(f'/* cvtir fp */')
-            elif key == (0x6C, 0x03):  # cvtri
-                lines.append(f'/* cvtri fp */')
+            # ---- 0x65: modpc ----
+            elif key == (0x65, 0x05):
+                lines.append(f'{dst} = g_i960.PC; g_i960.PC = (g_i960.PC & ~{src2}) | (g_i960.r[{dst_reg}] & {src2}); /* modpc */')
+
+            # ---- 0x66: calls ----
+            elif key == (0x66, 0x00):
+                lines.append(f'/* calls {src1} - system call */')
+
+            # ---- 0x67: emul, ediv ----
+            elif key == (0x67, 0x00):
+                dst_pair = dst_reg & 0x1E
+                lines.append(f'{{ uint64_t _r = (uint64_t){src1} * (uint64_t){src2}; g_i960.r[{dst_pair}+1] = (uint32_t)(_r >> 32); g_i960.r[{dst_pair}] = (uint32_t)_r; }} /* emul */')
+            elif key == (0x67, 0x04):
+                dst_pair = dst_reg & 0x1E
+                lines.append(f'{{ uint64_t _dividend = ((uint64_t)g_i960.r[{(src2_reg & 0x1E) + 1}] << 32) | g_i960.r[{src2_reg & 0x1E}]; if ({src1}) {{ g_i960.r[{dst_pair}+1] = (uint32_t)(_dividend / {src1}); g_i960.r[{dst_pair}] = (uint32_t)(_dividend % {src1}); }} }} /* ediv */')
+
+            # ---- 0x68-0x6E: floating point (single precision) ----
+            elif key == (0x68, 0x00):  lines.append(f'g_i960.fp[{dst_reg & 3}] = atan2(g_i960.fp[{src2_reg & 3}], g_i960.fp[{src1_reg & 3}]); /* atanr */')
+            elif key == (0x68, 0x04):  lines.append(f'g_i960.fp[{dst_reg & 3}] = log(g_i960.fp[{src1_reg & 3}]); /* logr */')
+            elif key == (0x68, 0x05):  lines.append(f'g_i960.fp[{dst_reg & 3}] = log10(g_i960.fp[{src1_reg & 3}]); /* logeprl */')
+            elif key == (0x68, 0x06):  lines.append(f'g_i960.fp[{dst_reg & 3}] = cos(g_i960.fp[{src1_reg & 3}]); /* cosr */')
+            elif key == (0x68, 0x07):  lines.append(f'g_i960.fp[{dst_reg & 3}] = sin(g_i960.fp[{src1_reg & 3}]); /* sinr */')
+            elif key == (0x68, 0x08):  lines.append(f'g_i960.fp[{dst_reg & 3}] = tan(g_i960.fp[{src1_reg & 3}]); /* tanr */')
+
+            elif key == (0x6C, 0x00):  lines.append(f'g_i960.r[{dst_reg}] = (int32_t)g_i960.fp[{src1_reg & 3}]; /* cvtri */')
+            elif key == (0x6C, 0x02):  lines.append(f'g_i960.fp[{dst_reg & 3}] = (double)(int32_t){src1}; /* cvtir */')
+            elif key == (0x6C, 0x09):  lines.append(f'g_i960.fp[{dst_reg & 3}] = (double)(int32_t){src1}; /* cvtir */')
+            elif key == (0x6D, 0x09):  lines.append(f'g_i960.fp[{dst_reg & 3}] = g_i960.fp[{src1_reg & 3}]; /* movrl */')
+
+            elif key == (0x6E, 0x02):  lines.append(f'i960_cmp_d(g_i960.fp[{src1_reg & 3}], g_i960.fp[{src2_reg & 3}]); /* cmpr */')
+            elif key == (0x6E, 0x05):  lines.append(f'i960_cmp_d(g_i960.fp[{src1_reg & 3}], g_i960.fp[{src2_reg & 3}]); /* cmpor */')
+
+            # ---- 0x70: mulo, remo, divo ----
+            elif key == (0x70, 0x01):  lines.append(f'{dst} = {src1} * {src2}; /* mulo */')
+            elif key == (0x70, 0x08):  lines.append(f'{dst} = ({src1} != 0) ? ({src2} % {src1}) : 0; /* remo */')
+            elif key == (0x70, 0x0B):  lines.append(f'{dst} = ({src1} != 0) ? ({src2} / {src1}) : 0; /* divo */')
+
+            # ---- 0x74: muli, remi, divi ----
+            elif key == (0x74, 0x01):  lines.append(f'{dst} = (uint32_t)((int32_t){src1} * (int32_t){src2}); /* muli */')
+            elif key == (0x74, 0x08):  lines.append(f'{dst} = ({src1} != 0) ? (uint32_t)((int32_t){src2} % (int32_t){src1}) : 0; /* remi */')
+            elif key == (0x74, 0x0B):  lines.append(f'{dst} = ({src1} != 0) ? (uint32_t)((int32_t){src2} / (int32_t){src1}) : 0; /* divi */')
+
+            # ---- 0x78: FP single (addr, subr, mulr, divr, cmpr) ----
+            elif key == (0x78, 0x0B):  lines.append(f'g_i960.fp[{dst_reg & 3}] = g_i960.fp[{src2_reg & 3}] / g_i960.fp[{src1_reg & 3}]; /* divr */')
+            elif key == (0x78, 0x0C):  lines.append(f'g_i960.fp[{dst_reg & 3}] = g_i960.fp[{src2_reg & 3}] * g_i960.fp[{src1_reg & 3}]; /* mulr */')
+            elif key == (0x78, 0x0D):  lines.append(f'g_i960.fp[{dst_reg & 3}] = g_i960.fp[{src2_reg & 3}] - g_i960.fp[{src1_reg & 3}]; /* subr */')
+            elif key == (0x78, 0x0F):  lines.append(f'g_i960.fp[{dst_reg & 3}] = g_i960.fp[{src2_reg & 3}] + g_i960.fp[{src1_reg & 3}]; /* addr */')
+            elif key == (0x78, 0x05):  lines.append(f'g_i960.fp[{dst_reg & 3}] = g_i960.fp[{src1_reg & 3}]; /* movr */')
+
+            # ---- 0x79: FP double (addrl, subrl, mulrl, divrl) ----
+            elif key == (0x79, 0x0B):  lines.append(f'g_i960.fp[{dst_reg & 3}] = g_i960.fp[{src2_reg & 3}] / g_i960.fp[{src1_reg & 3}]; /* divrl */')
+            elif key == (0x79, 0x0C):  lines.append(f'g_i960.fp[{dst_reg & 3}] = g_i960.fp[{src2_reg & 3}] * g_i960.fp[{src1_reg & 3}]; /* mulrl */')
+            elif key == (0x79, 0x0D):  lines.append(f'g_i960.fp[{dst_reg & 3}] = g_i960.fp[{src2_reg & 3}] - g_i960.fp[{src1_reg & 3}]; /* subrl */')
+            elif key == (0x79, 0x0F):  lines.append(f'g_i960.fp[{dst_reg & 3}] = g_i960.fp[{src2_reg & 3}] + g_i960.fp[{src1_reg & 3}]; /* addrl */')
+
+            # ---- 0x7A: FP compare ----
+            elif key == (0x7A, 0x02):  lines.append(f'i960_cmp_d(g_i960.fp[{src1_reg & 3}], g_i960.fp[{src2_reg & 3}]); /* cmprl */')
 
             else:
                 lines.append(f'/* TODO: REG opcode=(0x{opcode:02X}, 0x{ext:X}) word=0x{word:08X} */')
-            return lines
+            return lines, ret_size
 
         # ---- MEM format ----
         if 0x80 <= opcode <= 0xCF:
             src_dst_reg = (word >> 19) & 0x1F
             abase_reg = (word >> 14) & 0x1F
-            mode = (word >> 10) & 0xF
 
             reg = get_reg_c(src_dst_reg)
             abase = get_reg_c(abase_reg)
 
-            # Compute effective address
+            # Compute effective address using MAME's get_ea() logic
             ea = None
             inst_size = 4
 
-            if mode == 0x0:  # offset(abase)
-                offset_val = word & 0xFFF
-                ea = f'({abase} + 0x{offset_val:X})'
-            elif mode == 0x4:  # (abase)
-                ea = f'{abase}'
-            elif mode == 0x5:  # disp32
-                disp = self.read32(addr + 4)
-                inst_size = 8
-                ea = f'0x{disp:08X}u'
-            elif mode == 0x7:  # disp32(abase)
-                disp = self.read32(addr + 4)
-                inst_size = 8
-                ea = f'({abase} + 0x{disp:08X}u)'
-            elif mode == 0xC:  # (abase)[index*scale]
-                index_reg = word & 0x1F
-                scale = 1 << ((word >> 7) & 0x7)
-                idx = get_reg_c(index_reg)
-                ea = f'({abase} + {idx} * {scale})'
-            elif mode == 0xD:  # disp32[index*scale]
-                disp = self.read32(addr + 4)
-                index_reg = word & 0x1F
-                scale = 1 << ((word >> 7) & 0x7)
-                idx = get_reg_c(index_reg)
-                inst_size = 8
-                ea = f'(0x{disp:08X}u + {idx} * {scale})'
-            elif mode == 0xE:  # disp32(abase)[index*scale]
-                disp = self.read32(addr + 4)
-                index_reg = word & 0x1F
-                scale = 1 << ((word >> 7) & 0x7)
-                idx = get_reg_c(index_reg)
-                inst_size = 8
-                ea = f'(0x{disp:08X}u + {abase} + {idx} * {scale})'
+            if not (word & 0x1000):
+                # MEMA format (bit 12 = 0): 13-bit offset, optional abase
+                offset_val = word & 0x1FFF
+                if word & 0x2000:
+                    # abase + offset
+                    if offset_val == 0:
+                        ea = f'{abase}'
+                    else:
+                        ea = f'({abase} + 0x{offset_val:X})'
+                else:
+                    # absolute offset (no abase)
+                    ea = f'0x{offset_val:X}u'
             else:
-                ea = f'0 /* TODO: MEM mode 0x{mode:X} */'
+                # MEMB format (bit 12 = 1): mode + index + scale
+                mode = (word >> 10) & 0xF
+                index_reg = word & 0x1F
+                scale_bits = (word >> 7) & 0x7
+                scale_val = 1 << scale_bits
+                idx = get_reg_c(index_reg)
+
+                if mode == 0x4:    # (abase) - register indirect
+                    ea = f'{abase}'
+                elif mode == 0x5:  # IP-relative: disp32 + (addr + 8)
+                    disp = self.read32(addr + 4)
+                    inst_size = 8
+                    target = disp + (addr + 8)
+                    ea = f'0x{target:08X}u /* IP-rel */'
+                elif mode == 0x7:  # abase + index*scale (4-byte, no disp)
+                    if scale_val == 1:
+                        ea = f'({abase} + {idx})'
+                    else:
+                        ea = f'({abase} + ({idx} << {scale_bits}))'
+                elif mode == 0xC:  # disp32 (absolute, 8-byte)
+                    disp = self.read32(addr + 4)
+                    inst_size = 8
+                    ea = f'0x{disp:08X}u'
+                elif mode == 0xD:  # disp32 + abase (8-byte)
+                    disp = self.read32(addr + 4)
+                    inst_size = 8
+                    if disp == 0:
+                        ea = f'{abase}'
+                    else:
+                        ea = f'({abase} + 0x{disp:08X}u)'
+                elif mode == 0xE:  # disp32 + index*scale (8-byte)
+                    disp = self.read32(addr + 4)
+                    inst_size = 8
+                    if scale_val == 1:
+                        ea = f'(0x{disp:08X}u + {idx})'
+                    else:
+                        ea = f'(0x{disp:08X}u + ({idx} << {scale_bits}))'
+                elif mode == 0xF:  # disp32 + abase + index*scale (8-byte)
+                    disp = self.read32(addr + 4)
+                    inst_size = 8
+                    if scale_val == 1:
+                        ea = f'(0x{disp:08X}u + {abase} + {idx})'
+                    else:
+                        ea = f'(0x{disp:08X}u + {abase} + ({idx} << {scale_bits}))'
+                else:
+                    ea = f'0 /* TODO: MEMB mode 0x{mode:X} */'
 
             # Generate load/store
             if opcode == 0x80:  # ldob
@@ -453,11 +498,12 @@ class I960Lifter:
                 lines.append(f'op_stos((uint16_t){reg}, {ea}); /* stis */')
             else:
                 lines.append(f'/* TODO: MEM opcode 0x{opcode:02X} ea={ea} */')
-            return lines
+            ret_size = inst_size
+            return lines, ret_size
 
         # Unknown instruction
         lines.append(f'/* UNKNOWN: 0x{word:08X} at 0x{addr:08X} */')
-        return lines
+        return lines, ret_size
 
 
 def discover_functions(data, max_size):
