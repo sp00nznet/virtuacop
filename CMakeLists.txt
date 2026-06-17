@@ -4,6 +4,11 @@ project(virtuacop C)
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+# SDL2 imported targets (SDL2::SDL2, SDL2::SDL2main) are directory-scoped when
+# discovered. Find the package at top-level scope so the launcher executable
+# below can link SDL2::SDL2main directly.
+find_package(SDL2 REQUIRED)
+
 # Embed model2recomp as subdirectory
 set(MODEL2RECOMP_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 add_subdirectory(ext/model2recomp)

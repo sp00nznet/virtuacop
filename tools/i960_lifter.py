@@ -11,9 +11,16 @@ Usage:
 
 import os
 import sys
+import re
 import struct
 from pathlib import Path
 from collections import defaultdict
+
+
+# Matches an emitted label line, e.g. "L_000005E4: ;"
+_LABEL_RE = re.compile(r'^\s*L_([0-9A-Fa-f]{8})\s*:')
+# Matches a goto referencing a label, e.g. "goto L_000005E4"
+_GOTO_RE = re.compile(r'goto L_([0-9A-Fa-f]{8})')
 
 
 # Register name mapping for C code
@@ -35,6 +42,13 @@ def sign_extend(val, bits):
 
 def get_reg_c(r):
     return C_REG.get(r, f'I960_R({r})')
+
+
+def comment_safe(s):
+    """Neutralize comment markers so an expression can be embedded inside a
+    /* ... */ comment without prematurely closing it (C has no nested comments).
+    Register annotations like I960_R(0)/*pfp*/ would otherwise break TODO lines."""
+    return s.replace('/*', '(*').replace('*/', '*)')
 
 
 def get_src_c(reg, is_literal):
@@ -89,10 +103,12 @@ class I960Lifter:
             if target is not None and func_addr <= target < max_addr:
                 local_labels.add(target)
 
-            # Check for ret
-            if opcode == 0x0A:
-                if end_addr is None:
-                    max_addr = scan_offset + 4
+            # Without explicit bounds, the function ends at the first ret.
+            # With bounds, lift the whole range so multi-block functions (a
+            # conditional branch that skips over an early ret) keep all their
+            # labels; trailing data past the final ret becomes dead code.
+            if opcode == 0x0A and end_addr is None:
+                max_addr = scan_offset + 4
                 break
 
             scan_offset += inst_size
@@ -103,9 +119,11 @@ class I960Lifter:
             word = self.read32(offset)
             opcode = (word >> 24) & 0xFF
 
-            # Emit label if this is a branch target
+            # Emit label if this is a branch target. The trailing ';' is an
+            # empty statement so a label is valid even when the next line is a
+            # comment or the closing brace of the function.
             if addr in local_labels:
-                lines.append(f'L_{addr:08X}:')
+                lines.append(f'L_{addr:08X}: ;')
 
             c_code, inst_size = self._lift_instruction(word, addr)
             if c_code:
@@ -114,12 +132,36 @@ class I960Lifter:
 
             offset += inst_size
 
-            # Stop at ret
-            if opcode == 0x0A:
+            # Without explicit bounds, stop at the first ret.
+            if opcode == 0x0A and end_addr is None:
                 break
 
+        lines = self._fixup_dangling_gotos(lines)
         self.functions[func_addr] = lines
         return lines
+
+    @staticmethod
+    def _fixup_dangling_gotos(lines):
+        """Rewrite any goto whose target label was never emitted.
+
+        Out-of-range branches (and bytes misdecoded as code in data regions)
+        produce gotos to addresses with no label in this function. Route them
+        through the function table as a tail call so the output always compiles
+        and inter-function transfers still dispatch correctly at runtime.
+        """
+        emitted = set()
+        for ln in lines:
+            m = _LABEL_RE.match(ln)
+            if m:
+                emitted.add(m.group(1).upper())
+
+        def repl(mm):
+            tgt = mm.group(1).upper()
+            if tgt in emitted:
+                return mm.group(0)
+            return f'{{ func_table_call(0x{tgt}); return; }}'
+
+        return [_GOTO_RE.sub(repl, ln) for ln in lines]
 
     def _lift_instruction(self, word, addr):
         """Lift a single instruction to C code. Returns (list of C lines, inst_size)."""
@@ -130,7 +172,7 @@ class I960Lifter:
         # ---- CTRL format ----
         if 0x08 <= opcode <= 0x1F:
             disp = sign_extend(word & 0x00FFFFFC, 24)
-            target = addr + disp
+            target = (addr + disp) & 0xFFFFFFFF
 
             if opcode == 0x08:  # b (unconditional branch)
                 lines.append(f'goto L_{target:08X}; /* b 0x{target:08X} */')
@@ -170,7 +212,7 @@ class I960Lifter:
             src2_reg = (word >> 14) & 0x1F
             m1 = (word >> 13) & 1
             disp = sign_extend(word & 0x1FFC, 13)
-            target = addr + disp
+            target = (addr + disp) & 0xFFFFFFFF
 
             src1 = get_src_c(src1_reg, m1)
             src2 = get_reg_c(src2_reg)
@@ -225,7 +267,11 @@ class I960Lifter:
             src1_reg = word & 0x1F
             src2_reg = (word >> 14) & 0x1F
             dst_reg = (word >> 19) & 0x1F
-            m1 = (word >> 5) & 1
+            # Operand mode flags: m1=bit11 (0x800), m2=bit12 (0x1000).
+            # When set, the corresponding src field is a 5-bit literal rather
+            # than a register. (Bit 5 is NOT m1 - that earlier decode silently
+            # corrupted every REG op with a literal src1, e.g. "addo 4, ...".)
+            m1 = (word >> 11) & 1
             m2 = (word >> 12) & 1
 
             src1 = get_src_c(src1_reg, m1)
@@ -323,7 +369,7 @@ class I960Lifter:
 
             # ---- 0x66: calls ----
             elif key == (0x66, 0x00):
-                lines.append(f'/* calls {src1} - system call */')
+                lines.append(f'/* calls {comment_safe(src1)} - system call */')
 
             # ---- 0x67: emul, ediv ----
             elif key == (0x67, 0x00):
@@ -416,7 +462,7 @@ class I960Lifter:
                 elif mode == 0x5:  # IP-relative: disp32 + (addr + 8)
                     disp = self.read32(addr + 4)
                     inst_size = 8
-                    target = disp + (addr + 8)
+                    target = (disp + (addr + 8)) & 0xFFFFFFFF
                     ea = f'0x{target:08X}u /* IP-rel */'
                 elif mode == 0x7:  # abase + index*scale (4-byte, no disp)
                     if scale_val == 1:
@@ -457,7 +503,7 @@ class I960Lifter:
             elif opcode == 0x82:  # stob
                 lines.append(f'op_stob((uint8_t){reg}, {ea}); /* stob */')
             elif opcode == 0x84:  # bx (branch indirect)
-                lines.append(f'/* bx {ea} - indirect branch */')
+                lines.append(f'/* bx {comment_safe(ea)} - indirect branch */')
                 lines.append(f'func_table_call({ea});')
                 lines.append(f'return;')
             elif opcode == 0x85:  # balx
@@ -497,7 +543,7 @@ class I960Lifter:
             elif opcode == 0xCA:  # stis
                 lines.append(f'op_stos((uint16_t){reg}, {ea}); /* stis */')
             else:
-                lines.append(f'/* TODO: MEM opcode 0x{opcode:02X} ea={ea} */')
+                lines.append(f'/* TODO: MEM opcode 0x{opcode:02X} ea={comment_safe(ea)} */')
             ret_size = inst_size
             return lines, ret_size
 

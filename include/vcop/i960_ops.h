@@ -146,6 +146,16 @@ static inline void op_cmpo(uint32_t src1, uint32_t src2)
     i960_cmp_u(src1, src2);
 }
 
+/* CMPR/CMPRL: floating-point compare, sets AC condition code.
+ * Unordered (NaN) operands set the unordered condition. */
+static inline void i960_cmp_d(double v1, double v2)
+{
+    if (v1 < v2)       I960_CC_SET(I960_AC_CC_LT);
+    else if (v1 == v2) I960_CC_SET(I960_AC_CC_EQ);
+    else if (v1 > v2)  I960_CC_SET(I960_AC_CC_GT);
+    else               I960_CC_SET(I960_AC_CC_UN);  /* NaN */
+}
+
 /* ---- Conditional branches ---- */
 /* These check AC condition code against a mask */
 

@@ -17,6 +17,7 @@
 #include "vcop/functions.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 
 int main(int argc, char *argv[])
 {
@@ -41,19 +42,46 @@ int main(int argc, char *argv[])
     /* 3. Register all recompiled i960 functions */
     vcop_register_all();
 
-    /* 4. Main frame loop */
+    /*
+     * 4. Boot the i960.
+     *
+     * The CPU resets to the entry point (IP) with the frame pointer and stack
+     * pointer initialized from the Process Control Block. We reproduce that
+     * documented boot state, then dispatch the entry function through the
+     * function table. The reset routine performs hardware/memory init and
+     * returns; this is the first real exercise of the recompiled code and the
+     * model2recomp bus.
+     */
+    #define VCOP_ENTRY_POINT 0x000005D0u
+    I960_FP = 0x00500C00u; /* Frame Pointer in Work RAM */
+    I960_SP = 0x00500C40u; /* Stack Pointer */
+    g_i960.IP = VCOP_ENTRY_POINT;
+
+    printf("Booting i960 at entry point 0x%08X...\n", VCOP_ENTRY_POINT);
+    if (!func_table_call(VCOP_ENTRY_POINT)) {
+        fprintf(stderr, "Entry point 0x%08X is not registered!\n", VCOP_ENTRY_POINT);
+    } else {
+        printf("Entry routine returned (i960 reset/init complete).\n");
+    }
+
+    /* 5. Main frame loop.
+     * VCOP_MAX_FRAMES (env) caps the run for automated boot tests; unset = run
+     * until the window is closed. */
+    const char *max_frames_env = getenv("VCOP_MAX_FRAMES");
+    long max_frames = max_frames_env ? strtol(max_frames_env, NULL, 10) : 0;
+    long frame = 0;
+
     printf("Starting main loop...\n");
     while (model2recomp_begin_frame()) {
+        if (max_frames > 0 && frame++ >= max_frames) {
+            printf("Reached VCOP_MAX_FRAMES=%ld, exiting loop.\n", max_frames);
+            break;
+        }
 
         /*
-         * Run one frame of recompiled game code.
-         *
-         * Once the ROM is analyzed and recompiled, this will call:
-         *   1. The main game loop function
-         *   2. Any per-frame update functions
-         *   3. Geometry submission to TGP
-         *
-         * For now, the frame loop runs empty (black screen).
+         * Per-frame game code would be dispatched here (the recompiled main
+         * loop / VBlank handler) once the per-frame entry point is identified.
+         * For now we drive the hardware frame cadence: raise VBlank and present.
          */
 
         /* Trigger VBlank interrupt */
