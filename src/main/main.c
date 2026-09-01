@@ -18,6 +18,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 int main(int argc, char *argv[])
 {
@@ -42,48 +43,51 @@ int main(int argc, char *argv[])
     /* 3. Register all recompiled i960 functions */
     vcop_register_all();
 
+    /* VCOP_MAX_FRAMES (env) caps the run for automated boot tests; unset = run
+     * until the window is closed. The game owns the frame loop and never
+     * returns, so the limit is enforced at the field-sync point. */
+    const char *max_frames_env = getenv("VCOP_MAX_FRAMES");
+    model2recomp_set_frame_limit(max_frames_env ? strtol(max_frames_env, NULL, 10) : 0);
+
     /*
      * 4. Boot the i960.
      *
-     * The CPU resets to the entry point (IP) with the frame pointer and stack
-     * pointer initialized from the Process Control Block. We reproduce that
-     * documented boot state, then dispatch the entry function through the
-     * function table. The reset routine performs hardware/memory init and
-     * returns; this is the first real exercise of the recompiled code and the
-     * model2recomp bus.
+     * Reset enters at the SAT/PRCB-documented IP with FP/SP from the PRCB.
+     * The reset stub at 0x5D0 relocates the PRCB and interrupt table into work
+     * RAM and then issues an IAC "Reinitialize Processor" message, which hands
+     * control to the real firmware entry (0x6A0 -> main at 0x2370). Follow that
+     * chain rather than hardcoding the second entry point.
      */
     #define VCOP_ENTRY_POINT 0x000005D0u
-    I960_FP = 0x00500C00u; /* Frame Pointer in Work RAM */
-    I960_SP = 0x00500C40u; /* Stack Pointer */
-    g_i960.IP = VCOP_ENTRY_POINT;
+    #define VCOP_RESET_PRCB  0x000000B0u
 
-    printf("Booting i960 at entry point 0x%08X...\n", VCOP_ENTRY_POINT);
-    if (!func_table_call(VCOP_ENTRY_POINT)) {
-        fprintf(stderr, "Entry point 0x%08X is not registered!\n", VCOP_ENTRY_POINT);
-    } else {
-        printf("Entry routine returned (i960 reset/init complete).\n");
-    }
+    uint32_t ip = VCOP_ENTRY_POINT;
+    uint32_t prcb = VCOP_RESET_PRCB;
 
-    /* 5. Main frame loop.
-     * VCOP_MAX_FRAMES (env) caps the run for automated boot tests; unset = run
-     * until the window is closed. */
-    const char *max_frames_env = getenv("VCOP_MAX_FRAMES");
-    long max_frames = max_frames_env ? strtol(max_frames_env, NULL, 10) : 0;
-    long frame = 0;
+    for (int hop = 0; ip != 0 && hop < 8; hop++) {
+        /* Initial FP comes from the PRCB stack-pointer field; SP sits one
+         * register-save area above it. */
+        I960_FP = bus_read32(prcb + 0x18);
+        I960_SP = I960_FP + 0x40;
+        g_i960.IP = ip;
 
-    printf("Starting main loop...\n");
-    while (model2recomp_begin_frame()) {
-        if (max_frames > 0 && frame++ >= max_frames) {
-            printf("Reached VCOP_MAX_FRAMES=%ld, exiting loop.\n", max_frames);
+        printf("Booting i960 at 0x%08X (PRCB 0x%08X, FP 0x%08X)...\n",
+               ip, prcb, I960_FP);
+        if (!func_table_call(ip)) {
+            fprintf(stderr, "Entry point 0x%08X is not registered!\n", ip);
             break;
         }
+        printf("  routine returned.\n");
+        ip = bus_iac_take_reinit(&prcb);
+    }
 
-        /*
-         * Per-frame game code would be dispatched here (the recompiled main
-         * loop / VBlank handler) once the per-frame entry point is identified.
-         * For now we drive the hardware frame cadence: raise VBlank and present.
-         */
-
+    /* 5. Fallback frame loop.
+     *
+     * Reaching here means the game returned from main instead of entering its
+     * own loop - i.e. init bailed out early. Keep the window alive so the
+     * failure is visible rather than exiting instantly. */
+    printf("Game returned from main; running fallback frame loop.\n");
+    while (model2recomp_begin_frame()) {
         /* Trigger VBlank interrupt */
         model2recomp_trigger_vblank();
 

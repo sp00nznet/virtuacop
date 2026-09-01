@@ -19,6 +19,8 @@
 
 #include "model2recomp/i960.h"
 #include "model2recomp/bus.h"
+#include <math.h>
+#include <string.h>
 
 /* ---- Arithmetic ---- */
 
@@ -297,27 +299,50 @@ static inline uint32_t op_mov(uint32_t src)
     return src;
 }
 
-/* ---- Floating point ---- */
+/* ---- Floating point ----
+ *
+ * Real operands live either in the four fp registers or, far more commonly, in
+ * ordinary global/local registers holding an IEEE bit pattern - single
+ * precision for the "real" ops, a register pair for the "long real" ops. The
+ * REG mode bits pick which, so the lifter resolves that statically and calls
+ * these to reinterpret the bits. */
 
-static inline float op_addr(float src1, float src2)
+static inline double i960_u2f(uint32_t v)
 {
-    return src1 + src2;
+    float f;
+    memcpy(&f, &v, sizeof(f));
+    return (double)f;
 }
 
-static inline float op_subr(float src1, float src2)
+static inline uint32_t i960_f2u(double d)
 {
-    return src2 - src1;
+    float f = (float)d;
+    uint32_t v;
+    memcpy(&v, &f, sizeof(v));
+    return v;
 }
 
-static inline float op_mulr(float src1, float src2)
+static inline double i960_u2d(uint32_t lo, uint32_t hi)
 {
-    return src1 * src2;
+    uint64_t bits = ((uint64_t)hi << 32) | lo;
+    double d;
+    memcpy(&d, &bits, sizeof(d));
+    return d;
 }
 
-static inline float op_divr(float src1, float src2)
+static inline void i960_d2u(double d, uint32_t *lo, uint32_t *hi)
 {
-    if (src1 == 0.0f) return 0.0f;
-    return src2 / src1;
+    uint64_t bits;
+    memcpy(&bits, &d, sizeof(bits));
+    *lo = (uint32_t)bits;
+    *hi = (uint32_t)(bits >> 32);
+}
+
+/* ROUNDR / CVTRI use the current rounding mode; round-to-nearest is the
+ * i960 reset default and the only mode this game selects. */
+static inline double i960_round(double d)
+{
+    return nearbyint(d);
 }
 
 /* ---- Test/Fault (conditional on AC) ---- */

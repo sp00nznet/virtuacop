@@ -155,13 +155,20 @@ class I960Lifter:
             if m:
                 emitted.add(m.group(1).upper())
 
-        def repl(mm):
-            tgt = mm.group(1).upper()
-            if tgt in emitted:
-                return mm.group(0)
-            return f'{{ func_table_call(0x{tgt}); return; }}'
+        def make_repl(is_bal):
+            def repl(mm):
+                tgt = mm.group(1).upper()
+                if tgt in emitted:
+                    return mm.group(0)
+                if is_bal:
+                    # bal is a leaf call: the callee returns via bx (g14) to the
+                    # instruction after the bal, so fall through, don't tail-call.
+                    return f'func_table_call(0x{tgt})'
+                return f'{{ func_table_call(0x{tgt}); return; }}'
+            return repl
 
-        return [_GOTO_RE.sub(repl, ln) for ln in lines]
+        return [_GOTO_RE.sub(make_repl(ln.rstrip().endswith('/* bal */')), ln)
+                for ln in lines]
 
     def _lift_instruction(self, word, addr):
         """Lift a single instruction to C code. Returns (list of C lines, inst_size)."""
@@ -185,7 +192,7 @@ class I960Lifter:
                 lines.append(f'return;')
             elif opcode == 0x0B:  # bal (branch and link)
                 lines.append(f'I960_G(14) = 0x{addr+4:08X}; /* bal 0x{target:08X} */')
-                lines.append(f'goto L_{target:08X};')
+                lines.append(f'goto L_{target:08X}; /* bal */')
             elif opcode == 0x10:  # bno
                 lines.append(f'/* bno 0x{target:08X} - branch if unordered (NaN) */')
             elif opcode == 0x11:  # bg
@@ -273,10 +280,31 @@ class I960Lifter:
             # corrupted every REG op with a literal src1, e.g. "addo 4, ...".)
             m1 = (word >> 11) & 1
             m2 = (word >> 12) & 1
+            m3 = (word >> 13) & 1
 
             src1 = get_src_c(src1_reg, m1)
             src2 = get_src_c(src2_reg, m2)
             dst = get_reg_c(dst_reg)
+
+            # Real operands: a mode bit selects an fp register (literal form)
+            # or an ordinary register holding IEEE bits. Resolved statically
+            # here; mirrors get_1_rif / get_2_rif / set_rif in the MAME core.
+            def f_src(reg, mode, long_real=False):
+                if not mode:
+                    if long_real:
+                        return f'i960_u2d(g_i960.r[{reg & 0x1E}], g_i960.r[{(reg & 0x1E) + 1}])'
+                    return f'i960_u2f(g_i960.r[{reg}])'
+                if reg < 4:
+                    return f'g_i960.fp[{reg}]'
+                return '1.0' if reg == 0x16 else '0.0'
+
+            def f_dst(expr, long_real=False):
+                if m3:
+                    return f'g_i960.fp[{dst_reg & 3}] = {expr};'
+                if long_real:
+                    pair = dst_reg & 0x1E
+                    return f'i960_d2u({expr}, &g_i960.r[{pair}], &g_i960.r[{pair + 1}]);'
+                return f'g_i960.r[{dst_reg}] = i960_f2u({expr});'
 
             key = (opcode, ext)
 
@@ -375,25 +403,58 @@ class I960Lifter:
             elif key == (0x67, 0x00):
                 dst_pair = dst_reg & 0x1E
                 lines.append(f'{{ uint64_t _r = (uint64_t){src1} * (uint64_t){src2}; g_i960.r[{dst_pair}+1] = (uint32_t)(_r >> 32); g_i960.r[{dst_pair}] = (uint32_t)_r; }} /* emul */')
-            elif key == (0x67, 0x04):
+            elif key == (0x67, 0x01):
                 dst_pair = dst_reg & 0x1E
-                lines.append(f'{{ uint64_t _dividend = ((uint64_t)g_i960.r[{(src2_reg & 0x1E) + 1}] << 32) | g_i960.r[{src2_reg & 0x1E}]; if ({src1}) {{ g_i960.r[{dst_pair}+1] = (uint32_t)(_dividend / {src1}); g_i960.r[{dst_pair}] = (uint32_t)(_dividend % {src1}); }} }} /* ediv */')
+                src2_pair = src2_reg & 0x1E
+                lines.append(f'{{ uint64_t _d = ((uint64_t)g_i960.r[{src2_pair + 1}] << 32) | g_i960.r[{src2_pair}]; if ({src1}) {{ g_i960.r[{dst_pair}] = (uint32_t)(_d % {src1}); g_i960.r[{dst_pair}+1] = (uint32_t)(_d / {src1}); }} }} /* ediv */')
 
-            # ---- 0x68-0x6E: floating point (single precision) ----
-            elif key == (0x68, 0x00):  lines.append(f'g_i960.fp[{dst_reg & 3}] = atan2(g_i960.fp[{src2_reg & 3}], g_i960.fp[{src1_reg & 3}]); /* atanr */')
-            elif key == (0x68, 0x04):  lines.append(f'g_i960.fp[{dst_reg & 3}] = log(g_i960.fp[{src1_reg & 3}]); /* logr */')
-            elif key == (0x68, 0x05):  lines.append(f'g_i960.fp[{dst_reg & 3}] = log10(g_i960.fp[{src1_reg & 3}]); /* logeprl */')
-            elif key == (0x68, 0x06):  lines.append(f'g_i960.fp[{dst_reg & 3}] = cos(g_i960.fp[{src1_reg & 3}]); /* cosr */')
-            elif key == (0x68, 0x07):  lines.append(f'g_i960.fp[{dst_reg & 3}] = sin(g_i960.fp[{src1_reg & 3}]); /* sinr */')
-            elif key == (0x68, 0x08):  lines.append(f'g_i960.fp[{dst_reg & 3}] = tan(g_i960.fp[{src1_reg & 3}]); /* tanr */')
+            # ---- 0x674-0x677, 0x6C0-0x6C3: integer <-> real conversion ----
+            elif key == (0x67, 0x04):
+                lines.append(f_dst(f'(double)(int32_t){src1}') + ' /* cvtir */')
+            elif key == (0x67, 0x05):
+                lines.append(f_dst(f'(double)(int32_t){src1}', True) + ' /* cvtilr */')
+            elif key == (0x67, 0x06):
+                lines.append(f_dst(f'{f_src(src2_reg, m2, True)} * pow(2.0, (double)(int32_t){src1})', True) + ' /* scalerl */')
+            elif key == (0x67, 0x07):
+                lines.append(f_dst(f'{f_src(src2_reg, m2)} * pow(2.0, (double)(int32_t){src1})') + ' /* scaler */')
 
-            elif key == (0x6C, 0x00):  lines.append(f'g_i960.r[{dst_reg}] = (int32_t)g_i960.fp[{src1_reg & 3}]; /* cvtri */')
-            elif key == (0x6C, 0x02):  lines.append(f'g_i960.fp[{dst_reg & 3}] = (double)(int32_t){src1}; /* cvtir */')
-            elif key == (0x6C, 0x09):  lines.append(f'g_i960.fp[{dst_reg & 3}] = (double)(int32_t){src1}; /* cvtir */')
-            elif key == (0x6D, 0x09):  lines.append(f'g_i960.fp[{dst_reg & 3}] = g_i960.fp[{src1_reg & 3}]; /* movrl */')
+            elif key == (0x6C, 0x00):
+                lines.append(f'{dst} = (uint32_t)(int32_t)i960_round({f_src(src1_reg, m1)}); /* cvtri */')
+            elif key == (0x6C, 0x02):
+                lines.append(f'{dst} = (uint32_t)(int32_t){f_src(src1_reg, m1)}; /* cvtzri */')
+            elif key in ((0x6C, 0x01), (0x6C, 0x03)):
+                pair = dst_reg & 0x1E
+                conv = 'i960_round(' + f_src(src1_reg, m1) + ')' if ext == 0x01 else f_src(src1_reg, m1)
+                mnem = 'cvtril' if ext == 0x01 else 'cvtzril'
+                lines.append(f'{{ int64_t _v = (int64_t){conv}; g_i960.r[{pair}] = (uint32_t)_v; g_i960.r[{pair + 1}] = (uint32_t)((uint64_t)_v >> 32); }} /* {mnem} */')
 
-            elif key == (0x6E, 0x02):  lines.append(f'i960_cmp_d(g_i960.fp[{src1_reg & 3}], g_i960.fp[{src2_reg & 3}]); /* cmpr */')
-            elif key == (0x6E, 0x05):  lines.append(f'i960_cmp_d(g_i960.fp[{src1_reg & 3}], g_i960.fp[{src2_reg & 3}]); /* cmpor */')
+            # ---- 0x680-0x68E / 0x690-0x69E: transcendental (real / long real) ----
+            elif opcode in (0x68, 0x69):
+                lr = (opcode == 0x69)
+                a = f_src(src1_reg, m1, lr)
+                b = f_src(src2_reg, m2, lr)
+                unary = {0x08: f'sqrt({a})', 0x09: f'pow(2.0, {a}) - 1.0',
+                         0x0A: f'logb({a})', 0x0B: f'i960_round({a})',
+                         0x0C: f'sin({a})', 0x0D: f'cos({a})', 0x0E: f'tan({a})'}
+                binary = {0x00: f'atan2({b}, {a})', 0x01: f'{b} * log2({a} + 1.0)',
+                          0x02: f'{b} * log2({a})', 0x03: f'fmod({b}, {a})'}
+                suffix = 'rl' if lr else 'r'
+                if ext == 0x05:
+                    lines.append(f'i960_cmp_d({a}, {b}); /* cmp{suffix} */')
+                elif ext in unary:
+                    lines.append(f_dst(unary[ext], lr) + f' /* op{ext:X}{suffix} */')
+                elif ext in binary:
+                    lines.append(f_dst(binary[ext], lr) + f' /* op{ext:X}{suffix} */')
+                else:
+                    lines.append(f'/* TODO: REG opcode=(0x{opcode:02X}, 0x{ext:X}) word=0x{word:08X} */')
+
+            # ---- 0x6C9 movr / 0x6D9 movrl / 0x6E1 movre ----
+            elif key == (0x6C, 0x09):
+                lines.append(f_dst(f_src(src1_reg, m1)) + ' /* movr */')
+            elif key == (0x6D, 0x09):
+                lines.append(f_dst(f_src(src1_reg, m1, True), True) + ' /* movrl */')
+            elif key == (0x6E, 0x01):
+                lines.append(f_dst(f_src(src1_reg, m1, True), True) + ' /* movre (as long real) */')
 
             # ---- 0x70: mulo, remo, divo ----
             elif key == (0x70, 0x01):  lines.append(f'{dst} = {src1} * {src2}; /* mulo */')
@@ -405,21 +466,14 @@ class I960Lifter:
             elif key == (0x74, 0x08):  lines.append(f'{dst} = ({src1} != 0) ? (uint32_t)((int32_t){src2} % (int32_t){src1}) : 0; /* remi */')
             elif key == (0x74, 0x0B):  lines.append(f'{dst} = ({src1} != 0) ? (uint32_t)((int32_t){src2} / (int32_t){src1}) : 0; /* divi */')
 
-            # ---- 0x78: FP single (addr, subr, mulr, divr, cmpr) ----
-            elif key == (0x78, 0x0B):  lines.append(f'g_i960.fp[{dst_reg & 3}] = g_i960.fp[{src2_reg & 3}] / g_i960.fp[{src1_reg & 3}]; /* divr */')
-            elif key == (0x78, 0x0C):  lines.append(f'g_i960.fp[{dst_reg & 3}] = g_i960.fp[{src2_reg & 3}] * g_i960.fp[{src1_reg & 3}]; /* mulr */')
-            elif key == (0x78, 0x0D):  lines.append(f'g_i960.fp[{dst_reg & 3}] = g_i960.fp[{src2_reg & 3}] - g_i960.fp[{src1_reg & 3}]; /* subr */')
-            elif key == (0x78, 0x0F):  lines.append(f'g_i960.fp[{dst_reg & 3}] = g_i960.fp[{src2_reg & 3}] + g_i960.fp[{src1_reg & 3}]; /* addr */')
-            elif key == (0x78, 0x05):  lines.append(f'g_i960.fp[{dst_reg & 3}] = g_i960.fp[{src1_reg & 3}]; /* movr */')
-
-            # ---- 0x79: FP double (addrl, subrl, mulrl, divrl) ----
-            elif key == (0x79, 0x0B):  lines.append(f'g_i960.fp[{dst_reg & 3}] = g_i960.fp[{src2_reg & 3}] / g_i960.fp[{src1_reg & 3}]; /* divrl */')
-            elif key == (0x79, 0x0C):  lines.append(f'g_i960.fp[{dst_reg & 3}] = g_i960.fp[{src2_reg & 3}] * g_i960.fp[{src1_reg & 3}]; /* mulrl */')
-            elif key == (0x79, 0x0D):  lines.append(f'g_i960.fp[{dst_reg & 3}] = g_i960.fp[{src2_reg & 3}] - g_i960.fp[{src1_reg & 3}]; /* subrl */')
-            elif key == (0x79, 0x0F):  lines.append(f'g_i960.fp[{dst_reg & 3}] = g_i960.fp[{src2_reg & 3}] + g_i960.fp[{src1_reg & 3}]; /* addrl */')
-
-            # ---- 0x7A: FP compare ----
-            elif key == (0x7A, 0x02):  lines.append(f'i960_cmp_d(g_i960.fp[{src1_reg & 3}], g_i960.fp[{src2_reg & 3}]); /* cmprl */')
+            # ---- 0x78B-0x78F / 0x79B-0x79F: real arithmetic ----
+            elif opcode in (0x78, 0x79) and ext in (0x0B, 0x0C, 0x0D, 0x0F):
+                lr = (opcode == 0x79)
+                a = f_src(src1_reg, m1, lr)
+                b = f_src(src2_reg, m2, lr)
+                op, mnem = {0x0B: ('/', 'div'), 0x0C: ('*', 'mul'),
+                            0x0D: ('-', 'sub'), 0x0F: ('+', 'add')}[ext]
+                lines.append(f_dst(f'{b} {op} {a}', lr) + f' /* {mnem}r{"l" if lr else ""} */')
 
             else:
                 lines.append(f'/* TODO: REG opcode=(0x{opcode:02X}, 0x{ext:X}) word=0x{word:08X} */')
@@ -503,9 +557,14 @@ class I960Lifter:
             elif opcode == 0x82:  # stob
                 lines.append(f'op_stob((uint8_t){reg}, {ea}); /* stob */')
             elif opcode == 0x84:  # bx (branch indirect)
-                lines.append(f'/* bx {comment_safe(ea)} - indirect branch */')
-                lines.append(f'func_table_call({ea});')
-                lines.append(f'return;')
+                if ea == 'I960_G(14)':
+                    # bx (g14) is how a bal-called leaf procedure returns.
+                    # bal is lifted as a real call, so plain return is correct.
+                    lines.append(f'return; /* bx (g14) - leaf return */')
+                else:
+                    lines.append(f'/* bx {comment_safe(ea)} - indirect branch */')
+                    lines.append(f'func_table_call({ea});')
+                    lines.append(f'return;')
             elif opcode == 0x85:  # balx
                 lines.append(f'{reg} = 0x{addr + inst_size:08X}; /* balx */')
                 lines.append(f'func_table_call({ea});')
@@ -562,9 +621,12 @@ def discover_functions(data, max_size):
     prev_was_ret = False
     while offset < max_size:
         text, size, is_call, is_branch, target = disasm_one(data, offset, offset)
-        if is_call and target is not None and 0 < target < max_size:
-            calls.add(target)
         word = struct.unpack_from('<I', data, offset)[0]
+        # call (0x09) and bal (0x0B) both name a procedure entry; bal is the
+        # leaf-call form used heavily by the Sega runtime library.
+        is_entry = is_call or ((word >> 24) & 0xFF) == 0x0B
+        if is_entry and target is not None and 0 < target < max_size:
+            calls.add(target)
         if prev_was_ret and word != 0 and word != 0xFFFFFFFF:
             post_ret.add(offset)
         prev_was_ret = ((word >> 24) & 0xFF) == 0x0A
