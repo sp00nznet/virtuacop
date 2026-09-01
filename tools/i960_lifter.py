@@ -650,7 +650,14 @@ def discover_functions(data, max_size):
     post_ret = set()
 
     offset = 0
-    prev_was_ret = False
+    # Set once a ret is seen and cleared by the next real instruction, so that
+    # alignment padding between functions is skipped rather than ending the
+    # search. Virtua Cop's compiler pads with zero words, and the earlier
+    # "the very next word after a ret" rule gave up on the first pad word -
+    # which lost every function that is only ever reached through a function
+    # pointer, since nothing in the code names its address either. The whole
+    # scene renderer hung off one of them.
+    after_ret = False
     while offset < max_size:
         text, size, is_call, is_branch, target = disasm_one(data, offset, offset)
         word = struct.unpack_from('<I', data, offset)[0]
@@ -659,9 +666,13 @@ def discover_functions(data, max_size):
         is_entry = is_call or ((word >> 24) & 0xFF) == 0x0B
         if is_entry and target is not None and 0 < target < max_size:
             calls.add(target)
-        if prev_was_ret and word != 0 and word != 0xFFFFFFFF:
+
+        is_padding = word == 0 or word == 0xFFFFFFFF
+        if after_ret and not is_padding:
             post_ret.add(offset)
-        prev_was_ret = ((word >> 24) & 0xFF) == 0x0A
+            after_ret = False
+        if ((word >> 24) & 0xFF) == 0x0A:
+            after_ret = True
         offset += size
 
     all_funcs = sorted(calls | post_ret | interrupt_handlers(data, max_size))
