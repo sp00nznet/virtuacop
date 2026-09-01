@@ -611,6 +611,38 @@ class I960Lifter:
         return lines, ret_size
 
 
+def interrupt_handlers(data, max_size):
+    """Entry points reachable only through the i960 interrupt table.
+
+    An interrupt handler is never called or branched to by any instruction, so
+    scanning the code finds nothing. It is reached because the hardware reads
+    its address out of the interrupt table, which the boot ROM builds. Walk
+    there the way the processor does: SAT+4 gives the PRCB, PRCB+0x14 the
+    interrupt table. The table's first nine words are pending state; words 9
+    onward hold the handler for vectors 8, 9, 10...
+
+    Without this, Virtua Cop's VBlank handler at 0x720 was never lifted as a
+    function - it sat as unreachable trailing code inside its predecessor - and
+    the game did no per-frame work at all.
+    """
+    def rd(addr):
+        if addr < 0 or addr + 4 > len(data):
+            return 0
+        return struct.unpack_from('<I', data, addr)[0]
+
+    prcb = rd(4)
+    itab = rd(prcb + 0x14)
+    if not itab or itab >= max_size:
+        return set()
+
+    handlers = set()
+    for word in range(9, 0x400 // 4):
+        target = rd(itab + word * 4)
+        if 0 < target < max_size:
+            handlers.add(target)
+    return handlers
+
+
 def discover_functions(data, max_size):
     """Find all function entry points."""
     from tools.rom_loader import disasm_one
@@ -632,7 +664,7 @@ def discover_functions(data, max_size):
         prev_was_ret = ((word >> 24) & 0xFF) == 0x0A
         offset += size
 
-    all_funcs = sorted(calls | post_ret)
+    all_funcs = sorted(calls | post_ret | interrupt_handlers(data, max_size))
     valid = []
     for addr in all_funcs:
         if addr < max_size - 4:
