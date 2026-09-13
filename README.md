@@ -42,13 +42,22 @@ hardware's real colour path, with the tilemap HUD over it.
 | Geometry + rasterizer | Working — textured, lit, z-sorted |
 | Tilemaps | Working — four System 24 layers, two passes around the 3D |
 | Math coprocessor | Working — MB86233 emulated, runs the game's microcode |
-| **Polygons draw too dark** | **Open bug.** Many render black. The palette is left half-faded. |
-| **Input** | **Not wired.** Buttons and the lightgun do not reach the game. |
+| Input | **Working.** Mouse is the lightgun; coin, start, service and test reach the game |
+| **Polygons draw too dark** | **Cause found**, not fixed - the interrupt frame, see below |
+| **Coins do not become credits** | The I/O board's settings EEPROM is not modelled |
 | **Sound** | **Not implemented.** No 68000, no MultiPCM. |
 
-Nothing is playable yet: with no input there is no way to insert a coin. The
-next two things worth doing are in
+Not playable yet: coins reach the game but do not become credits, because the
+I/O board's settings EEPROM is not modelled. Everything measured is in
 [docs/technical/known-issues.md](docs/technical/known-issues.md).
+
+**The black scenery has a cause.** The VBlank handler is dispatched without the
+stack frame the hardware pushes, so its `ret` unwinds one frame too far every
+field; within a few hundred fields the frame pointer leaves work RAM and the
+guest reads ROM for its stack temporaries. One of them is a palette fade
+counter, and the resulting bogus fade copies the i960 boot header over the
+polygon palette. Fixing the frame properly stops the game rendering at all, for
+reasons not yet found - that is the next thing to solve.
 
 ### Where it came from
 
@@ -76,7 +85,7 @@ The full story is in
 | Rasterizer | Sega / Lockheed-Martin custom | model2recomp — point sampled, no bilinear or mipmaps |
 | Tilemaps | Sega System 24 | model2recomp — four 8×8 4bpp layers |
 | Sound | 68000 @ 10 MHz + YM3438 + 2× MultiPCM | Stub |
-| I/O | Model 1 I/O Board 2 (837-11694), lightgun FPGA | DPRAM handshake works; input not connected |
+| I/O | Model 1 I/O Board 2 (837-11694), lightgun FPGA | Buttons and lightgun reach the game through DPRAM; the board's settings EEPROM does not exist |
 
 ## Quick Start
 
@@ -119,6 +128,18 @@ short run legitimately shows a black screen. For a bounded test:
 ```bash
 VCOP_MAX_FRAMES=2000 MODEL2_SCREENSHOT=out.ppm ./build/Release/vcop.exe ./roms
 ```
+
+### Controls
+
+The mouse is player 1's lightgun.
+
+| | |
+|---|---|
+| Left button | Fire at the crosshair |
+| Right button | Fire off-screen — which is how this game reloads |
+| Middle button | Insert a coin |
+| `5` / `1` | Coin / Start |
+| `9` / `F2` | Service / Test |
 
 The long version of all of this, including what the ROM images are and why,
 is in **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)**.
@@ -204,12 +225,8 @@ tables. Without it nothing rotates.
 
 ## How You Can Help
 
-- **Input.** The I/O board's DPRAM protocol works and SDL2 collects keyboard
-  and mouse state; nothing copies one into the other. This is the single thing
-  standing between the current build and being able to insert a coin.
-- **The dark-polygon bug.** Well characterised, not solved — see
-  [known-issues.md](docs/technical/known-issues.md). The trail ends at a
-  palette fade that stops two steps in.
+- **The I/O board settings EEPROM**, so that a coin becomes a credit.
+- **The interrupt frame.** See [known-issues.md](docs/technical/known-issues.md).
 - **Sound.** A 68000 core and MultiPCM in model2recomp.
 - **Another Model 2 title.** The tooling here is not especially Virtua
   Cop-specific; pointing it at Daytona USA would find out how much.

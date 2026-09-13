@@ -163,7 +163,17 @@ class I960Lifter:
                 if is_bal:
                     # bal is a leaf call: the callee returns via bx (g14) to the
                     # instruction after the bal, so fall through, don't tail-call.
-                    return f'func_table_call(0x{tgt})'
+                    #
+                    # g14 is 0 everywhere except inside a bal sequence - the i960
+                    # ABI requires it, and Sega's compiler leans on it, using
+                    # "st g14, addr" as a store-zero. The leaf is supposed to put
+                    # it back (mov g14,g1 / mov 0,g14 / ... / bx (g1)), but a leaf
+                    # that returns straight through bx (g14) does not, and then
+                    # every later store-zero writes a return address instead. One
+                    # of those lands in the palette fade counter and corrupts the
+                    # polygon palette. Restoring the invariant here covers both
+                    # shapes of leaf.
+                    return f'{{ func_table_call(0x{tgt}); I960_G(14) = 0; }}'
                 return f'{{ func_table_call(0x{tgt}); return; }}'
             return repl
 

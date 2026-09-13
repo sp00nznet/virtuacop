@@ -180,7 +180,9 @@ be in different scenes. Sample rather than trusting a single frame.
 | `MODEL2_SCREENSHOT=path` | Write the final frame as a PPM |
 | `MODEL2_SHOT_EVERY=N` | Also write `path.<field>.ppm` every N fields |
 | `MODEL2_TRACE=N` | Print the first N function dispatches, indented by call depth |
-| `MODEL2_HOLD=test\|service\|start1\|coin1` | Hold a button — **currently inert**, input is not wired |
+| `MODEL2_INPUT=coin1,start1` | Drive buttons headlessly; each is pulsed, so edge-triggered inputs register |
+| `MODEL2_POLYCOUNT=N` | Report the geometry engine's polygon count every N fields |
+| `MODEL2_WATCH=0xADDR` | Print every 32-bit write to that address, with the guest function doing it |
 
 ## What you will and will not see
 
@@ -189,11 +191,16 @@ perspective-correct mapping, z-sorting, the sky and ground, and the tilemap HUD
 with "CREDIT 0" over the top.
 
 **You will not see:** correct colours on everything. Many polygons, buildings
-especially, render black. That is the open bug in
+especially, render black - the cause is known and written up in
 [technical/known-issues.md](technical/known-issues.md).
 
-**You cannot play.** Input is not connected to the game, so there is no way to
-insert a coin. Also there is no sound.
+**Controls:** the mouse is player 1's lightgun. Left button fires, right button
+fires off-screen (which is how this game reloads), middle button drops a coin.
+Keyboard: 5 coin, 1 start, 9 service, F2 test.
+
+**You cannot play yet.** The mouse aims and fires and the buttons reach the
+game, but coins do not become credits - the I/O board's settings EEPROM is not
+modelled. Also there is no sound.
 
 ## Troubleshooting
 

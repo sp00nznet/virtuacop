@@ -1,104 +1,87 @@
 # Known Issues
 
-Three things stand between this and a playable port. All are well characterised;
-none are solved.
+Three things stand between this and a playable port. The first now has a
+root cause; none are solved.
 
 ---
 
 ## 1. Polygons draw too dark, many fully black
 
-**Symptom.** The scene renders — geometry, textures, perspective, z-sorting all
-correct — but most surfaces come out black. Buildings are solid silhouettes.
-Only the brightest surfaces (grass, sky, road) have colour, and even those look
-dim.
+**Symptom.** The scene renders - geometry, textures, perspective, z-sorting all
+correct - but most surfaces come out black. Buildings are solid silhouettes.
 
-**The colour path is not the problem.** It matches MAME line for line:
+**Cause: found.** It is not the colour path, the palette upload, or the fade
+logic. It is the interrupt frame.
 
-```
-polygon texheader[3] -> colorbase (10 bits)
-                     -> palram[0x1000 + colorbase]        15-bit, 5 bits/channel
-                     -> one of 32 ramps per channel in colour-translate RAM
-                     -> indexed by luma (6 bits)
-                     -> gamma
-```
-
-**What differs is the data.** Palette RAM in the polygon range
-`0x1000`–`0x13FF` is largely zero in the affected scenes, so those polygons
-select ramp 0 for all three channels and resolve to black. A polygon with
-`colorbase = 0x026` reads `palram[0x1026]`, which is `0x0000`.
-
-### What is known
-
-Two functions write that range:
-
-| Function | Writes | What it is |
-|---|---|---|
-| `0x000029B0` | all 1,024 entries, `0x1000`–`0x13FF` | the scene's full polygon palette, once per scene |
-| `0x00003BE0` | 455 entries, `0x1000`–`0x11C1` | a **palette fade** |
-
-`0x3BE0` is the suspect. It copies 455 `u16` entries out of a fade lookup table
-the game builds in work RAM at `0x00501710`, `index * 0x38E` bytes in:
+The VBlank handler is dispatched at the field boundary, because recompiled code
+has no instruction boundary to interrupt. On real hardware, taking an interrupt
+pushes a stack frame and the handler's closing `ret` pops it. Called without
+one, that `ret` unwinds a frame nobody pushed - every field. Watch the frame
+pointer over a few hundred fields:
 
 ```
-index   = 30 - counter          counter is the float at 0x0050F364
-source  = 0x00501710 + index * 0x38E     (or 0x005081C0, chosen by 0x0050F360)
-dest    = 0x01802000             palette RAM, polygon range
+fp=00500500  fp=005004C0  fp=00500440  fp=00000000  fp=00000100  fp=0A0009C0
 ```
 
-In a 2,600-field capture it ran **twice** — counter `1` then `0` — writing a
-nearly-black level and then a dim one, and then stopped. The palette is left
-part-way through a fade-in that never completes.
+It leaves work RAM. From then on every frame-relative load in the guest reads
+ROM. One of them is in `0x00009700`, which stores a zero to `0x44(fp)` and
+reads it straight back to initialise the palette fade counter at `0x0050F364` -
+and gets `0x000008A0` out of the i960 interrupt table in ROM instead.
 
-Two candidate explanations, neither confirmed:
+That is a denormal float, so `0x00003BE0` (the fade) treats it as a live fade,
+and `0x00003B68` - which turns a fade level into a pointer into the fade LUT -
+has no case for the uninitialised selector at `0x0050F360` and returns the
+*index* where a pointer should be. The fade then copies 455 u16 from address 1.
+The result is visible in a palette dump: the i960 boot header, `0x000000B0` and
+`0x000005D0` and all, sitting in the polygon palette.
 
-- **The fade is not being stepped.** Something should call `0x3BE0` once per
-  field until the counter reaches 0; it is being called twice in 43 seconds.
-- **The completion path does nothing.** `0x3BE0` opens with
-  `cmpr g5, 0.0` / `be 0x3D44`. `0x3D44` is a small state machine on
-  `0x0050F35C` that dispatches to `0x3D78`, `0x3D9C`, `0x3DE4`, `0x3E2C` or
-  `0x3E68`. One of those should install the fully-lit palette. If the state
-  machine picks the wrong arm — or the lifted `cmpr`/`be` pair does not branch
-  when it should — the palette stays dim.
+```
+[pal] 1000: 0000 0000 00B0 0000 0000 0000 05D0 0000 F980 FFFF ...
+```
 
-### Ruled out by measurement
+Polygons whose colorbase lands in that range select ramp 0 on every channel and
+draw black. The ones that survive - grass, sky, road - are the ones whose
+palette entries sit above `0x11C1`, where the bogus fade stopped writing.
 
-- **The rasterizer.** Textures sample correctly; bright texels show through on
-  black surfaces, which means the texel fetch and luma path work and only the
-  base colour is wrong.
-- **Palette writes being lost.** `bus_write16` does a read-modify-write through
-  `bus_write32`, which makes a 16-bit store show up as two `palette_write`
-  calls. That looks like a duplicate write in a trace and is not one.
-- **Lighting.** Polygon luma values across a frame are varied and plausible
-  (0, 64, 80, 200, 255), and the lighting code matches MAME's
-  `geo_parse_np_ns` exactly.
+**Why it is not fixed.** Both faithful models of the interrupt frame - push one
+for the handler, or snapshot and restore the whole context - stop the game
+submitting *any* display list, permanently, from the first field. It is not
+stuck when they are used: it executes more distinct functions than the default
+does, so it gets further into its own logic and then fails somewhere else.
+`MODEL2_IRQMODE=0|1|2` selects between them, and the default is the one that
+draws.
 
-### Where to start
-
-Trace calls to `0x00003BE0` per field, and read `0x0050F35C` (the fade state)
-and `0x0050F364` (the counter) alongside. If the counter is not being stepped
-every field, find the caller. If it is, the bug is in the completion arm.
+Finding what modes 1 and 2 expose is the next thing to do, and the highest
+value work left in the project.
 
 ---
 
-## 2. Input does not reach the game
+## 2. Coins do not become credits
 
-**Symptom.** No button does anything, including inserting a coin. `MODEL2_HOLD`
-is inert.
+**Symptom.** Input works - a coin or start press reaches the game's own input
+word at `0x0050154C` as a clean edge, level then release - but the credit
+counter stays at zero.
 
-**Cause.** Two halves that were never joined. model2recomp's platform layer
-collects keyboard and mouse state and calls `io_set_input()` and
-`io_set_lightgun()`, which store it in `s_input_ports` and `s_lightgun`. The
-game reads its inputs out of **I/O board dual-port RAM** — Virtua Cop composes
-one word from DPRAM offsets `0x10`, `0x12`, `0x14` and `0x22` and inverts it,
-around `0x0000BC00`. Nothing copies the stored state into DPRAM.
+**What works.** The whole input path. The board's DPRAM is published every
+field with the input ports at `0x08`/`0x09`/`0x0A`/`0x11` and the lightgun's
+nine bytes at `0x80`, which is the layout the game reads: `0x00001300`
+composes the first four into one word and inverts it, `0x000014F0` reads four
+little-endian coordinates and a status byte. Mouse: left fires, right fires
+off-screen (reload), middle drops a coin. Keyboard: 5 coin, 1 start, 9
+service, F2 test.
 
-**Why it is the highest-value fix.** Everything else about the port works well
-enough to look at; this is what stands between it and being usable. The change
-is small and the test is obvious: press a key, watch the credit counter.
+**What is missing.** The I/O board's **93C46 EEPROM**, which holds coinage and
+the game's settings. MAME runs the board's real Z80 firmware and that firmware
+reads the EEPROM; model2recomp publishes DPRAM directly and has nothing to put
+in the settings area, so the game has no coins-per-credit to apply.
 
-The I/O board is a Model 1 I/O Board 2 (837-11694) — MAME's `model1io2.cpp`
-describes the DPRAM layout, including where the lightgun FPGA reports
-coordinates.
+Two ways forward: work out which DPRAM bytes carry the settings block and
+publish a sane default, or emulate the board's Z80 (`epr-16891.6` is in the ROM
+set) and let the firmware do it. The first is an afternoon; the second is the
+honest one.
+
+Worth knowing: the game has been seen to award itself credits, so the path
+exists and is gated on something readable rather than absent.
 
 ---
 
