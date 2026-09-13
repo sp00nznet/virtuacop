@@ -78,8 +78,8 @@ up.
 
 ## Step 3 (optional): Regenerate the recompiled C
 
-`src/recomp/` is already committed — 2,095 functions, about 121,000 lines of
-generated C across 11 files — so you can skip straight to building. Regenerate only if you
+`src/recomp/` is already committed — 1,559 functions, about 118,000 lines of
+generated C across 8 files — so you can skip straight to building. Regenerate only if you
 changed the lifter or you are on Revision A:
 
 ```bash
@@ -94,9 +94,9 @@ Program size: 484228 bytes
 Entry point: 0x000005D0
 Initial FP: 0x00500C00
 Discovering functions...
-Found 2095 functions
+Found 1559 functions
 Lifting functions to C...
-Generated 108440 lines of C code
+Generated 109020 lines of C code
 ```
 
 How it works, and what it gets wrong, is in
@@ -116,7 +116,7 @@ enough.
 
 This builds three things: `model2recomp` (the board), `vcop_game` (the
 recompiled i960 code), and `vcop.exe` (the launcher that ties them together).
-Expect it to take a couple of minutes — 121,000 lines of generated C is a lot
+Expect it to take a couple of minutes — 118,000 lines of generated C is a lot
 of `switch` statements.
 
 ## Step 5: Run
@@ -190,8 +190,8 @@ be in different scenes. Sample rather than trusting a single frame.
 perspective-correct mapping, z-sorting, the sky and ground, and the tilemap HUD
 with "CREDIT 0" over the top.
 
-**You will not see:** correct colours on everything. Many polygons, buildings
-especially, render black - the cause is known and written up in
+**You will not see:** everything correct. Some surfaces still render darker
+than they should. What was fixed, and what is left, is in
 [technical/known-issues.md](technical/known-issues.md).
 
 **Controls:** the mouse is player 1's lightgun. Left button fires, right button

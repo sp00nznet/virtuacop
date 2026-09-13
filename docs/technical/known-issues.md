@@ -5,89 +5,49 @@ root cause; none are solved.
 
 ---
 
-## 1. Polygons draw too dark, many fully black
+## 1. Polygons draw too dark (mostly fixed)
 
-**Symptom.** The scene renders - geometry, textures, perspective, z-sorting all
-correct - but most surfaces come out black. Buildings are solid silhouettes.
+**Was:** most scenery drew as solid black silhouettes.
 
-**Cause: found.** It is not the colour path, the palette upload, or the fade
-logic. It is the interrupt frame.
+**Cause, in full.** Three bugs in a chain, and the middle one was hiding the
+other two.
 
-The VBlank handler is dispatched at the field boundary, because recompiled code
-has no instruction boundary to interrupt. On real hardware, taking an interrupt
-pushes a stack frame and the handler's closing `ret` pops it. Called without
-one, that `ret` unwinds a frame nobody pushed - every field. Watch the frame
-pointer over a few hundred fields:
+1. **Function discovery treated a `ret` as the end of a function.** A
+   conditional branch that skips over an early return leaves a `ret` in the
+   middle of a function; the code after it is a continuation, not an entry
+   point. Splitting there cut real functions in half - most visibly the printf
+   routine at `0x00074E20` - and left paths that fall off the end of their
+   generated C without reaching the `ret` that pops the frame.
+2. **Every such path leaked a stack frame**, about one per field. The guest
+   stack climbed sixty bytes a field.
+3. **The interrupt frame was unbalanced in the other direction.** The VBlank
+   handler is dispatched at the field boundary without the frame the hardware
+   pushes, so its `ret` unwinds one too far - which happened to cancel the leak
+   and hide it, while walking the frame pointer down out of work RAM instead.
 
-```
-fp=00500500  fp=005004C0  fp=00500440  fp=00000000  fp=00000100  fp=0A0009C0
-```
-
-It leaves work RAM. From then on every frame-relative load in the guest reads
-ROM. One of them is in `0x00009700`, which stores a zero to `0x44(fp)` and
-reads it straight back to initialise the palette fade counter at `0x0050F364` -
-and gets `0x000008A0` out of the i960 interrupt table in ROM instead.
-
-That is a denormal float, so `0x00003BE0` (the fade) treats it as a live fade,
-and `0x00003B68` - which turns a fade level into a pointer into the fade LUT -
-has no case for the uninitialised selector at `0x0050F360` and returns the
-*index* where a pointer should be. The fade then copies 455 u16 from address 1.
-The result is visible in a palette dump: the i960 boot header, `0x000000B0` and
-`0x000005D0` and all, sitting in the polygon palette.
+With the frame pointer in ROM, `0x00009700` stored a zero to `0x44(fp)` and
+read back `0x000008A0` out of the i960 interrupt table. That denormal looked
+like a live palette fade; `0x00003B68` had no case for the uninitialised
+selector at `0x0050F360` and returned an index where a pointer belongs; and the
+fade copied 455 words from address 1 - the i960 boot header - straight into the
+polygon palette.
 
 ```
 [pal] 1000: 0000 0000 00B0 0000 0000 0000 05D0 0000 F980 FFFF ...
 ```
 
-Polygons whose colorbase lands in that range select ramp 0 on every channel and
-draw black. The ones that survive - grass, sky, road - are the ones whose
-palette entries sit above `0x11C1`, where the bogus fade stopped writing.
+**Fixed** by the discovery rule in [lifter.md](lifter.md): a post-`ret` address
+that something *branches* to is a label, not a function. The leak is gone, the
+stack high-water is back inside work RAM, the fade counter reads zero, and the
+scenery has its colours:
 
-**Why it is not fixed, and what is underneath it.** Correct the interrupt frame
-- `MODEL2_IRQMODE=1` or `2` - and the game stops submitting anything worth
-drawing. Not because it is stuck: it publishes a display list every field from
-the start, the lists are just nearly empty, about 360 opcodes over 600 fields
-where the default reaches 3,877 the moment the attract demo begins.
+![Attract mode with the palette intact](../attract_containers.png)
 
-The reason is the same problem pointing the other way. With the frame
-corrected the stack stops collapsing and starts **climbing**, about sixty bytes
-a field:
-
-```
-[poly] f100 ... sp=00503640      [poly] f400 ... sp=005082C0
-[poly] f200 ... sp=00504FC0      [poly] f500 ... sp=00509C40
-```
-
-It reaches the relocated PRCB at `0x00501000` within fifty fields, the
-interrupt table above it, and then the game's own variables. The default mode's
-unbalanced `ret` had been cancelling a **real frame leak** by accident.
-
-`MODEL2_LEAK=1` names it:
-
-```
-[leak] 00074E20 left sp 00500600 -> 00500780
-```
-
-`0x00074E20` is inside the printf family. Its generated C opens with
-`I960_SP += 0x180` and then takes a branch the lifter turned into a tail call,
-because **function discovery split the real function in two**: the data table
-at `0x00074DE0` - a hex-digit table and the string `(nul)` - follows a `ret`,
-which is exactly what a function entry looks like. The path taken through the
-second half falls off the end without reaching a `ret`, so the `0x180` is never
-given back. See [lifter.md](lifter.md).
-
-So the order of work is: stop the leak, then correct the interrupt frame, then
-the palette stops being corrupted and the scenery has its colours. Two ways to
-stop the leak, both worth doing:
-
-- **Teach function discovery to recognise data.** Printable ASCII after a
-  `ret` is a cheap, strong signal that a candidate is a string table rather
-  than an entry point.
-- **Balance the frame at the call site,** which knows the depth it should
-  return to. This was tried and made things worse - the correction fires on
-  legitimately deeper returns, and `i960_do_ret` with an empty register cache
-  reads a frame out of memory that was never written - so it needs doing
-  carefully.
+**Still open.** Some surfaces remain dark, and the faithful interrupt models
+(`MODEL2_IRQMODE=1` or `2`) now get much further than they used to - far enough
+to show the Sega warning screen correctly - but stall there instead of
+continuing into the attract demo. The default mode reaches attract, so it is
+still the default.
 
 ---
 

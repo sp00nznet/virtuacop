@@ -663,6 +663,8 @@ def discover_functions(data, max_size):
     calls = set()
     post_ret = set()
 
+    branch_targets = set()
+
     offset = 0
     # Set once a ret is seen and cleared by the next real instruction, so that
     # alignment padding between functions is skipped rather than ending the
@@ -675,19 +677,38 @@ def discover_functions(data, max_size):
     while offset < max_size:
         text, size, is_call, is_branch, target = disasm_one(data, offset, offset)
         word = struct.unpack_from('<I', data, offset)[0]
+        op = (word >> 24) & 0xFF
         # call (0x09) and bal (0x0B) both name a procedure entry; bal is the
         # leaf-call form used heavily by the Sega runtime library.
-        is_entry = is_call or ((word >> 24) & 0xFF) == 0x0B
+        is_entry = is_call or op == 0x0B
         if is_entry and target is not None and 0 < target < max_size:
             calls.add(target)
+
+        # Plain branches name a label, never a procedure: CTRL b (0x08) and the
+        # conditional forms (0x10-0x1F), and every COBR compare-and-branch.
+        if target is not None and 0 < target < max_size:
+            if op == 0x08 or 0x10 <= op <= 0x1F or 0x20 <= op <= 0x3F:
+                branch_targets.add(target)
 
         is_padding = word == 0 or word == 0xFFFFFFFF
         if after_ret and not is_padding:
             post_ret.add(offset)
             after_ret = False
-        if ((word >> 24) & 0xFF) == 0x0A:
+        if op == 0x0A:
             after_ret = True
         offset += size
+
+    # A "ret" is not always the end of a function - a conditional branch that
+    # skips over an early return leaves one in the middle. Code after such a
+    # ret is a continuation, reached by that branch, and taking it for a
+    # function entry cuts the real function in half: the second half gets its
+    # own C function, and the path through it falls off the end without ever
+    # reaching the ret that pops the frame. One leaked frame per field is
+    # enough for the guest stack to climb into the PRCB inside a minute.
+    #
+    # So a post-ret candidate that something branches to is a label. One that
+    # something *calls* is still a function, whichever else it is.
+    post_ret -= branch_targets - calls
 
     all_funcs = sorted(calls | post_ret | interrupt_handlers(data, max_size))
     valid = []

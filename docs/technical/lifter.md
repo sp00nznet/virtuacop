@@ -99,15 +99,29 @@ per-frame work, and everything looks like it boots fine.
 Finally, any candidate whose first word is `0x00000000` or `0xFFFFFFFF` is
 dropped — that is padding, not code.
 
-**This is not enough, and it has cost real time.** A *data table* after a `ret`
-also looks like a function entry. `0x00074DE0` is a hex-digit table followed by
-the string `(nul)`; taking it as an entry point splits the printf routine in
-two, and a path through the far half falls off the end of its generated C
-without reaching the `ret` that gives back the `0x180` of stack it took. One
+**A `ret` is not always the end of a function**, and assuming it is cost more
+than anything else in this project. A conditional branch that skips over an
+early return leaves a `ret` in the middle, and the code after it is a
+*continuation* — reached by that branch, part of the same function.
+
+Taking it for an entry point cuts the function in half. The second half gets
+its own C function; the path through it falls off the end without ever reaching
+the `ret` that pops the frame; and the stack it took is never given back. One
 leaked frame per field is enough for the guest stack to climb into the
-relocated PRCB inside a minute. See
-[known-issues.md](known-issues.md). Printable ASCII is the obvious filter and
-is not implemented yet.
+relocated PRCB within a minute, and from there into the game's own variables.
+It is what made most of Virtua Cop's scenery draw black.
+
+The rule that fixes it is a one-liner and reads as obviously true once seen:
+
+```python
+# A branch names a label. A call names a function.
+post_ret -= branch_targets - calls
+```
+
+`0x00074E58` is a `ret` inside the printf routine, and `0x00074E5C` after it is
+the target of a `cmpibne` a few instructions earlier. It is a label. Applying
+the rule dropped the function count from 2,095 to 1,559 — those 536 were all
+pieces of functions that had been sawn in half.
 
 Function *ends* are implicit: each function runs to the start of the next
 discovered one.
