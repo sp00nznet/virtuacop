@@ -128,6 +128,24 @@ static inline int32_t op_shri(uint32_t count, int32_t src)
     return src >> count;
 }
 
+/*
+ * SHRDI: shift right, dividing. An arithmetic shift that rounds toward zero
+ * rather than toward negative infinity, so it is an exact divide by a power
+ * of two for negative values too. Sega's compiler uses it wherever a signed
+ * value is divided by a constant. From i960.cpp case 0x59 sub-opcode 0xa.
+ */
+static inline uint32_t op_shrdi(uint32_t count, uint32_t src)
+{
+    if (count >= 32)
+        return 0;
+    if ((int32_t)src < 0) {
+        if (src & ((1u << count) - 1u))
+            return (uint32_t)((((int32_t)src) >> count) + 1);
+        return (uint32_t)(((int32_t)src) >> count);
+    }
+    return src >> count;
+}
+
 static inline uint32_t op_rotate(uint32_t count, uint32_t src)
 {
     count &= 31;

@@ -287,7 +287,38 @@ class I960Lifter:
             src1 = get_src_c(src1_reg, m1)
             src2 = get_reg_c(src2_reg)
 
-            if opcode == 0x30:  # bbc (branch if bit clear)
+            # The test family does not branch. It writes the condition code
+            # into a register as 0 or 1, which the compiler then turns into a
+            # mask - "subo 0, gN, gN" then "and" - to select a value without a
+            # branch. Dropping them leaves the register holding whatever was
+            # in it, and the mask selects garbage. Virtua Cop's palette loader
+            # wraps a counter exactly this way and then indexes a table of
+            # palette pointers with the result, so a missing "testl" fed an
+            # IEEE float to a DMA that expects an address.
+            #
+            # i960.cpp: the destination is the src1 field, and the condition
+            # mask is the low three bits of the opcode - except testno, which
+            # is true when no condition bit is set at all.
+            if opcode == 0x20:  # testno
+                dst = get_reg_c(src1_reg)
+                lines.append(f'{dst} = i960_test_cc(0x07) ? 0 : 1; /* testno */')
+            elif 0x21 <= opcode <= 0x27:
+                names = {0x21: ('testg',  'COND_G'),
+                         0x22: ('teste',  'COND_E'),
+                         0x23: ('testge', 'COND_GE'),
+                         0x24: ('testl',  'COND_L'),
+                         0x25: ('testne', 'COND_NE'),
+                         0x26: ('testle', 'COND_LE'),
+                         0x27: ('testo',  '0x07')}
+                name, cond = names[opcode]
+                dst = get_reg_c(src1_reg)
+                lines.append(f'{dst} = i960_test_cc({cond}) ? 1 : 0; /* {name} */')
+            elif opcode == 0x38:  # cmpibno - ordered never holds for integers
+                lines.append(f'op_cmpi((int32_t){src1}, (int32_t){src2}); /* cmpibno */')
+            elif opcode == 0x3F:  # cmpibo - always taken for integers
+                lines.append(f'op_cmpi((int32_t){src1}, (int32_t){src2});')
+                lines.append(f'goto L_{target:08X}; /* cmpibo */')
+            elif opcode == 0x30:  # bbc (branch if bit clear)
                 lines.append(f'if (!({src2} & (1u << ({src1} & 31)))) goto L_{target:08X}; /* bbc */')
             elif opcode == 0x37:  # bbs (branch if bit set)
                 lines.append(f'if ({src2} & (1u << ({src1} & 31))) goto L_{target:08X}; /* bbs */')
@@ -394,7 +425,7 @@ class I960Lifter:
             elif key == (0x59, 0x02):  lines.append(f'{dst} = {src2} - {src1}; /* subo */')
             elif key == (0x59, 0x03):  lines.append(f'{dst} = {src2} - {src1}; /* subi */')
             elif key == (0x59, 0x08):  lines.append(f'{dst} = op_shro({src1}, {src2}); /* shro */')
-            elif key == (0x59, 0x0A):  lines.append(f'/* shrdi - TODO */')
+            elif key == (0x59, 0x0A):  lines.append(f'{dst} = op_shrdi({src1}, {src2}); /* shrdi */')
             elif key == (0x59, 0x0B):  lines.append(f'{dst} = (uint32_t)((int32_t){src2} >> ({src1} & 31)); /* shri */')
             elif key == (0x59, 0x0C):  lines.append(f'{dst} = op_shlo({src1}, {src2}); /* shlo */')
             elif key == (0x59, 0x0D):  lines.append(f'{dst} = op_rotate({src1}, {src2}); /* rotate */')
@@ -431,7 +462,7 @@ class I960Lifter:
                 dst_quad = dst_reg & 0x1C
                 src1_quad = src1_reg & 0x1C
                 lines.append(f'g_i960.r[{dst_quad}] = g_i960.r[{src1_quad}]; g_i960.r[{dst_quad}+1] = g_i960.r[{src1_quad}+1]; g_i960.r[{dst_quad}+2] = g_i960.r[{src1_quad}+2]; g_i960.r[{dst_quad}+3] = g_i960.r[{src1_quad}+3]; /* movq */')
-            elif key == (0x5F, 0x00):  lines.append(f'{dst} = 0; /* testno (always false) */')
+            elif key == (0x5F, 0x00):  lines.append(f'{dst} = i960_test_cc(0x07) ? 0 : 1; /* testno */')
             elif key == (0x5F, 0x01):  lines.append(f'{dst} = op_testg(); /* testg */')
             elif key == (0x5F, 0x02):  lines.append(f'{dst} = op_teste(); /* teste */')
             elif key == (0x5F, 0x03):  lines.append(f'{dst} = op_testge(); /* testge */')
