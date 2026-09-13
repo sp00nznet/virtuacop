@@ -45,7 +45,7 @@ hardware's real colour path, with the tilemap HUD over it.
 | Input | **Working.** Mouse is the lightgun; coin, start, service and test reach the game |
 | Polygon colours | **Fixed** — the attract demo renders in full colour |
 | Credits | The board defaults to **free play** without its settings EEPROM, so the game starts on Start alone |
-| **In-game 3D** | Stage select and gameplay draw the HUD over a white screen — the open bug |
+| **In-game 3D** | Past the stage select the scene only partly draws, leaving the tilemap clear showing — the open bug |
 | **Sound** | **Not implemented.** No 68000, no MultiPCM. |
 
 **It boots, attracts, takes a coin and starts a game.** The attract demo runs

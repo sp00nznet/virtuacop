@@ -47,36 +47,66 @@ jump tables. Both live in [lifter.md](lifter.md).
 
 ---
 
-## 2. Coins do not become credits
+## 2. The 3D does not finish drawing past the stage select
 
-**Symptom.** Input works - a coin or start press reaches the game's own input
-word at `0x0050154C` as a clean edge, level then release - but the credit
-counter stays at zero.
+**Symptom.** Attract renders in full colour. Start reaches the stage select,
+and from there on the HUD draws over a flat light grey.
 
-**What works.** The whole input path. The board's DPRAM is published every
-field with the input ports at `0x08`/`0x09`/`0x0A`/`0x11` and the lightgun's
-nine bytes at `0x80`, which is the layout the game reads: `0x00001300`
-composes the first four into one word and inverts it, `0x000014F0` reads four
-little-endian coordinates and a status byte. Mouse: left fires, right fires
-off-screen (reload), middle drops a coin. Keyboard: 5 coin, 1 start, 9
-service, F2 test.
+**What the grey is.** Not the front tilemap pass, which draws nothing at all on
+that screen — it is tilemaps 3 and 2 in the *back* pass, filling the screen with
+palette word `0x8000`. That is a legitimate clear: `0x8000` selects ramp 0 on
+every channel, and ramp 0 at the tilemap's fixed luma index reads about `0xFA`,
+which gamma turns into the 248 grey you see. The back tilemap is supposed to be
+covered by the 3D.
 
-**What is missing.** The I/O board's **93C46 EEPROM**, which holds coinage and
-the game's settings. MAME runs the board's real Z80 firmware and that firmware
-reads the EEPROM; model2recomp publishes DPRAM directly and has nothing to put
-in the settings area, so the game has no coins-per-credit to apply.
+**What the 3D does.** It draws, but only about 48,000 of the screen's 190,464
+pixels, so most of the clear survives. The polygons it does draw have sane
+shading — `MODEL2_SHADE` shows proper palette entries, luma RAM and ramps,
+identical in kind to the attract scene that renders correctly — and their
+vertices are in normal ranges. So this is not the colour path and not the fill;
+the scene is simply incomplete.
 
-Two ways forward: work out which DPRAM bytes carry the settings block and
-publish a sane default, or emulate the board's Z80 (`epr-16891.6` is in the ROM
-set) and let the firmware do it. The first is an afternoon; the second is the
-honest one.
+**The likely reason: the guest stack again.** In-game, `MODEL2_LEAK` still names
+three functions — `0x0001C8D0`, `0x0000A500`, `0x00027860` — and the frame
+pointer leaves work RAM shortly after a game starts. `0x0001C8D0` is the jump
+table dispatcher: its targets *are* registered as functions, so `bx (g4)`
+dispatches into one, that one returns with `ret`, and the dispatcher's own
+fall-through path never reaches a `ret` of its own.
 
-Worth knowing: the game has been seen to award itself credits, so the path
-exists and is gated on something readable rather than absent.
+**Two fixes tried, both worse, both instructive:**
+
+- **Treating jump-table targets as labels** (like branch targets) fixes
+  `0x00074E20` — the printf routine, whose table entry `0x00074E4C` was
+  truncating it — but breaks `0x0001C8D0`, whose targets then miss entirely.
+  1,747 → 1,508 functions, and the game stops reaching the stage select.
+- **Extending a function's extent to cover its own branch and jump targets**,
+  so the targets can be labels *and* be inside the function. This regressed
+  further: the game stalls on the Sega warning screen and the in-game polygon
+  count falls to 1.
+
+The shape of the right answer is clear — a jump-table target is a label inside
+its dispatcher, and the dispatcher has to be lifted far enough to contain it —
+but the extent calculation needs to be right about where functions actually end
+rather than guessing, and guessing worse than the current guess makes things
+worse. That is the next piece of work.
 
 ---
 
-## 3. No sound
+## 3. Coins do not become credits
+
+The board defaults to **free play** without its settings EEPROM, so the game
+starts on Start alone and never needs a credit. Input itself works end to end:
+coin, start, service and test all reach the game's own input word at
+`0x0050154C` as clean edges, and the mouse aims and fires.
+
+What is missing is the I/O board's 93C46, which holds coinage and the game's
+settings. MAME runs the board's real Z80 firmware and that firmware reads the
+EEPROM; model2recomp publishes DPRAM directly and has nothing to put in the
+settings area.
+
+---
+
+## 4. No sound
 
 **Symptom.** Silence.
 
