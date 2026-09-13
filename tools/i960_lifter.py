@@ -9,6 +9,7 @@ Usage:
     python i960_lifter.py <program.bin> <output_dir>
 """
 
+import glob
 import os
 import sys
 import re
@@ -137,6 +138,38 @@ class I960Lifter:
                 break
 
         lines = self._fixup_dangling_gotos(lines)
+        # Falling off the end of the generated C is not the same as returning.
+        #
+        # Function bounds are a guess - each one runs to the next discovered
+        # entry - so a real function is sometimes cut in half, and a path
+        # through the first half then reaches the closing brace without ever
+        # executing a "ret". On hardware that path simply carries on into the
+        # following instructions. Here it returns to the caller instead, and
+        # the stack frame the function allocated is never given back: one
+        # leaked frame per call, and the guest stack climbs until it overwrites
+        # the PRCB and the game's own variables above it.
+        #
+        # So fall *through* - dispatch to the address the body stopped at,
+        # which is the next function, exactly as the hardware would.
+        if end_addr is not None and max_addr < len(self.data):
+            if not self._ends_in_transfer(lines):
+                lines.append(f'    /* falls through into 0x{max_addr:08X} */')
+                lines.append(f'    func_table_call(0x{max_addr:08X});')
+                lines.append(f'    return;')
+
+        self.functions[func_addr] = lines
+        return lines
+
+    @staticmethod
+    def _ends_in_transfer(lines):
+        """True if the last thing the body does is leave the function."""
+        for line in reversed(lines):
+            text = line.strip()
+            if not text or text.startswith('/*') or text.endswith(': ;'):
+                continue
+            return text == 'return;' or text.startswith('goto ')
+        return False
+
         self.functions[func_addr] = lines
         return lines
 
@@ -749,7 +782,22 @@ def discover_functions(data, max_size):
     # something *calls* is still a function, whichever else it is.
     post_ret -= branch_targets - calls
 
-    all_funcs = sorted(calls | post_ret | jump_targets |
+    # The printf at 0x00074E20 is one function whose blocks are not
+    # contiguous: it dispatches through a jump table into case bodies half the
+    # ROM away, and those branch back into the middle of it. Those landing
+    # sites are named by no call and sit inside another function's extent, so
+    # the branch is lifted as a dispatch that misses, control unwinds to
+    # printf's caller, and the 0x180-byte frame printf took is never given
+    # back. The game sprintfs its HUD text every field, so the guest stack
+    # climbs ~550 bytes a frame and has run off the end of work RAM by the
+    # time a game starts.
+    #
+    # Registering the four landing sites lets the chain run on to the real
+    # "ret". Doing this program-wide instead regresses everything - splitting
+    # a genuine function costs far more than a leak does.
+    printf_landings = {0x00074E44, 0x00074E5C, 0x00074E88, 0x00075890}
+
+    all_funcs = sorted(calls | post_ret | jump_targets | printf_landings |
                        interrupt_handlers(data, max_size))
     valid = []
     for addr in all_funcs:
@@ -768,6 +816,10 @@ def main():
     prog_path = sys.argv[1]
     output_dir = sys.argv[2]
     os.makedirs(output_dir, exist_ok=True)
+    # Stale output from a run that produced more files is still globbed by
+    # CMake, and every function in it is defined twice.
+    for stale in glob.glob(os.path.join(output_dir, 'vcop_code_*.c')):
+        os.remove(stale)
 
     with open(prog_path, 'rb') as f:
         data = f.read()
