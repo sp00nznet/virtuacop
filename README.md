@@ -45,7 +45,7 @@ the matrices, and model2recomp's rasterizer draws it.*
 | Boot | Full chain: reset stub → IAC reinitialize → firmware entry → `main` |
 | Frame loop | The game's own, at its video-status busy-wait |
 | Interrupts | VBlank handler dispatched at the field boundary |
-| Geometry + rasterizer | Working — textured, lit, z-sorted |
+| Geometry + rasterizer | Working — textured, lit, z-sorted, translucency and texture wrap correct |
 | Tilemaps | Working — four System 24 layers, two passes around the 3D |
 | Math coprocessor | Working — MB86233 emulated, runs the game's microcode |
 | Input | **Working.** Mouse is the lightgun; coin, start, service and test reach the game |

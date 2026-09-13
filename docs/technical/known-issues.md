@@ -113,7 +113,35 @@ flat fill covered the entire screen: text, 3D and all. That fill is what the
 
 ---
 
-## 4. Getting into a stage
+## 4. Textures and translucency — fixed
+
+**Was:** whole walls and ground planes looked like one stretched streak, and
+every sprite-like polygon drew as an opaque rectangle — clouds on yellow
+squares, a block over the HUD's revolver cylinder, the bullets at the bottom of
+the screen unreadable as bullets.
+
+Both were in model2recomp's rasterizer, and both are one-liners.
+
+**Texture coordinates always wrap.** `model2rd.ipp` masks with
+`tex_width - 1` unconditionally; the texture header's "smooth wrap" bits only
+pick how the *bilinear* filter behaves at the seam. Treating them as a wrap
+enable and clamping otherwise smears the edge texel across everything past the
+texture.
+
+**Translucency is three mechanisms, and all three were ignored.** The hardware
+has no alpha blend. `texheader[0]` bit 13 with bit 14 makes texel `0xF` the
+transparent index; bit 13 without bit 14 means draw nothing; bit 15 is a 50%
+checkerboard stipple.
+
+The attract frame goes from about 220 distinct colours to 500.
+
+What is still missing is the filtering: point sampling, no bilinear, no
+mipmaps, no microtexture. Without mipmaps a minified texture aliases, so
+ground planes and distant walls are noisier than the hardware's.
+
+---
+
+## 5. Getting into a stage
 
 The game boots, runs its attract cycle, takes a coin and a start, draws the
 stage select, and plays: `MODEL2_INPUT=coin1,start1,fire` reaches the wharf in
@@ -133,7 +161,7 @@ part-way is not established.
 
 ---
 
-## 5. Coins do not become credits
+## 6. Coins do not become credits
 
 The board defaults to **free play** without its settings EEPROM, so the game
 starts on Start alone and never needs a credit. Input itself works end to end:
@@ -147,7 +175,7 @@ settings area.
 
 ---
 
-## 6. No sound
+## 7. No sound
 
 **Symptom.** Silence.
 
