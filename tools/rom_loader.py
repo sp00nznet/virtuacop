@@ -65,6 +65,15 @@ TEXTURE_ROM = {
     ]
 }
 
+# TGP coprocessor math tables (CPU board): sin/cos, atan, 1/x, 1/sqrt(x)
+COPRO_TABLES_ROM = {
+    'size': 0x40000,
+    'parts': [
+        ('opr-14742a.45', 0x000000, 0x020000, 0),
+        ('opr-14743a.46', 0x000000, 0x020000, 2),
+    ]
+}
+
 # Sound CPU ROM (68000, big-endian 16-bit word-swapped)
 SOUND_ROM = {
     'size': 0xC0000,
@@ -209,6 +218,16 @@ def extract_roms(zip_path, output_dir):
         with open(tex_path, 'wb') as f:
             f.write(tex)
         print(f"  -> {tex_path} ({len(tex)} bytes)")
+        print()
+
+        # TGP coprocessor tables
+        print("=== Copro TGP tables (256KB) ===")
+        ctab = bytearray(COPRO_TABLES_ROM['size'])
+        interleave_32bit(ctab, COPRO_TABLES_ROM['parts'], zf)
+        ctab_path = os.path.join(output_dir, 'copro_tables.bin')
+        with open(ctab_path, 'wb') as f:
+            f.write(ctab)
+        print(f"  -> {ctab_path} ({len(ctab)} bytes)")
         print()
 
         # Sound ROM (68000, word-swapped)
