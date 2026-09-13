@@ -116,21 +116,27 @@ def interleave_32bit(output, parts, zf):
     """
     for part in parts:
         if len(part) == 5:
-            # Program ROM: (name_b, name_a, offset, size, word_off)
-            name = part[0]
+            # Program ROM: (name_b, name_a, offset, size, word_off). Revision B
+            # and Revision A differ only in these two chips, so take whichever
+            # the ZIP actually has rather than demanding one set.
+            names = [part[0], part[1]]
             offset = part[2]
             file_size = part[3]
             word_offset = part[4]
         else:
             # Data/polygon/texture ROM: (name, offset, size, word_off)
-            name = part[0]
+            names = [part[0]]
             offset = part[1]
             file_size = part[2]
             word_offset = part[3]
 
-        data = load_file_from_zip(zf, name)
+        data = None
+        for name in names:
+            data = load_file_from_zip(zf, name)
+            if data is not None:
+                break
         if data is None:
-            print(f"  WARNING: {name} not found in ZIP")
+            print(f"  WARNING: {' / '.join(names)} not found in ZIP")
             continue
 
         print(f"  {name}: {len(data)} bytes -> offset 0x{offset:08X} word_offset {word_offset}")

@@ -1,7 +1,10 @@
 build/
+build-*/
 .vs/
+.vscode/
 *.obj
 *.lib
+*.a
 *.exe
 *.pdb
 *.ilk
@@ -9,6 +12,17 @@ build/
 *.user
 CMakeSettings.json
 out/
+__pycache__/
+
+# ROM dumps and anything derived from them. Never committed.
 roms/
 *.zip
-__pycache__/
+*.bin
+
+# Agent scratch - never committed.
+CLAUDE.md
+.claude/
+AGENTS.md
+
+# Captures
+*.ppm
