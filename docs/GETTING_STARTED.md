@@ -183,24 +183,31 @@ be in different scenes. Sample rather than trusting a single frame.
 | `MODEL2_INPUT=coin1,start1` | Drive buttons headlessly; each is pulsed, so edge-triggered inputs register |
 | `MODEL2_POLYCOUNT=N` | Report the geometry engine's polygon count every N fields |
 | `MODEL2_WATCH=0xADDR` | Print every 32-bit write to that address, with the guest function doing it |
+| `MODEL2_WATCHPATH=1` | Print the last 32 dispatches alongside each watch hit |
+| `MODEL2_LEAK=1` | Name any function that returns with the guest stack higher than it found it, and print the stack high-water at exit |
+| `MODEL2_PROFILE=1` | Count dispatches per function and print the busiest at exit |
+| `MODEL2_CALLERS=0xADDR` | With `MODEL2_PROFILE`, count who dispatches to that one function |
+| `MODEL2_NOLAYER=<mask>` | Drop tilemap layers by bit, to see which one paints what |
+| `MODEL2_RAMDUMP=path` | Write work RAM, and the tilemap, character, palette and colour-translate RAM beside it |
 
 ## What you will and will not see
 
 **You will see:** the attract sequence — stage geometry with textures,
-perspective-correct mapping, z-sorting, the sky and ground, and the tilemap HUD
-with "CREDIT 0" over the top.
+perspective-correct mapping, z-sorting, the sky and ground, the enemies, and
+the tilemap HUD with "CREDIT 0" over the top. Start reaches the stage select,
+and from there a stage draws in first person with the ammo HUD over it.
 
-**You will not see:** the 3D past the stage select. Attract renders in full
-colour; once a game starts, the HUD draws over a white screen. That is the open
-bug in [technical/known-issues.md](technical/known-issues.md).
+**You will not hear anything**, and a stage has not been played through to its
+end — the headless input driver cannot aim a lightgun. See
+[technical/known-issues.md](technical/known-issues.md).
 
 **Controls:** the mouse is player 1's lightgun. Left button fires, right button
 fires off-screen (which is how this game reloads), middle button drops a coin.
 Keyboard: 5 coin, 1 start, 9 service, F2 test.
 
-**You can start a game**, and the mouse aims and fires — but the 3D does not
-draw once you are past the stage select, and there is no sound. The board
-defaults to free play, because its settings EEPROM is not modelled.
+**You can start a game** and the mouse aims and fires. The board defaults to
+free play, because its settings EEPROM is not modelled, so Start alone begins
+a game.
 
 ## Troubleshooting
 

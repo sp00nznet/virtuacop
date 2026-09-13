@@ -1,7 +1,6 @@
 # Known Issues
 
-Three things stand between this and a playable port. The first now has a
-root cause; none are solved.
+What is fixed, what is not, and what was measured on the way.
 
 ---
 
@@ -47,52 +46,94 @@ jump tables. Both live in [lifter.md](lifter.md).
 
 ---
 
-## 2. The 3D does not finish drawing past the stage select
+## 2. The guest stack ran into the game's own variables — fixed
 
-**Symptom.** Attract renders in full colour. Start reaches the stage select,
-and from there on the HUD draws over a flat light grey.
+**Was:** the game reached the stage select and then sat on the Sega warning
+screen forever, redrawing it, while the 3D drew a fraction of the screen.
 
-**What the grey is.** Not the front tilemap pass, which draws nothing at all on
-that screen — it is tilemaps 3 and 2 in the *back* pass, filling the screen with
-palette word `0x8000`. That is a legitimate clear: `0x8000` selects ramp 0 on
-every channel, and ramp 0 at the tilemap's fixed luma index reads about `0xFA`,
-which gamma turns into the 248 grey you see. The back tilemap is supposed to be
-covered by the 3D.
+**Cause.** The stack has about 2KB to work with. Its base is `0x00500C00` and
+the state machine's variables start at `0x005014B0`; 48 frames of 64 bytes is
+enough to reach them, and a leak got there. A local store from a frame that had
+climbed too high landed on the attract state at `0x005016CC` and on the
+countdown beside it. The countdown went negative, and state 0 — which draws the
+warning screen and advances when the countdown reaches exactly zero — sat there
+subtracting one from a number that would never be zero again.
 
-**What the 3D does.** It draws, but only about 48,000 of the screen's 190,464
-pixels, so most of the clear survives. The polygons it does draw have sane
-shading — `MODEL2_SHADE` shows proper palette entries, luma RAM and ramps,
-identical in kind to the attract scene that renders correctly — and their
-vertices are in normal ranges. So this is not the colour path and not the fill;
-the scene is simply incomplete.
+`MODEL2_WATCHPATH` is what found it: the dispatch ring named the chain down to
+the function, and the store's offset from `fp` made it a local, not a global.
 
-**The likely reason: the guest stack again.** In-game, `MODEL2_LEAK` still names
-three functions — `0x0001C8D0`, `0x0000A500`, `0x00027860` — and the frame
-pointer leaves work RAM shortly after a game starts. `0x0001C8D0` is the jump
-table dispatcher: its targets *are* registered as functions, so `bx (g4)`
-dispatches into one, that one returns with `ret`, and the dispatcher's own
-fall-through path never reaches a `ret` of its own.
+**The leak.** A branch that leaves the function it is in has nowhere to land
+when the landing site is not a registered function — which is what happens
+whenever a real function's blocks are not contiguous. A switch dispatched
+through `bx` makes them exactly that: the case bodies sit wherever the compiler
+put them and branch back into the middle of the dispatcher. The dispatch
+misses, control unwinds to the caller, and the frame is never given back.
 
-**Two fixes tried, both worse, both instructive:**
+The fix is to give it back, with the same guard a missed `call` already gets:
 
-- **Treating jump-table targets as labels** (like branch targets) fixes
-  `0x00074E20` — the printf routine, whose table entry `0x00074E4C` was
-  truncating it — but breaks `0x0001C8D0`, whose targets then miss entirely.
-  1,747 → 1,508 functions, and the game stops reaching the stage select.
-- **Extending a function's extent to cover its own branch and jump targets**,
-  so the targets can be labels *and* be inside the function. This regressed
-  further: the game stalls on the Sega warning screen and the in-game polygon
-  count falls to 1.
+```c
+{ if (!func_table_call(0x00074E44)) i960_do_ret(); return; }
+```
 
-The shape of the right answer is clear — a jump-table target is a label inside
-its dispatcher, and the dispatcher has to be lifted far enough to contain it —
-but the extent calculation needs to be right about where functions actually end
-rather than guessing, and guessing worse than the current guess makes things
-worse. That is the next piece of work.
+Plain branches only. A missed `bx (gN)` is how a `bal`-called leaf returns and
+is correct as it stands; popping a frame there unwinds one too far and the game
+never finishes booting.
+
+**Registering the landing sites instead does not work**, and this is the third
+time the project has learned it: splitting a genuine function costs more than a
+leak does. Doing it for the jump-table chains — 56 entries, a bounded and
+principled set — dropped attract from 1.2M polygons a field to 4,155 and
+stopped the 3D drawing at all. Doing it for every branch that crosses an extent
+boundary was worse.
+
+`MODEL2_LEAK` now reports nothing on either path and the guest stack
+high-water is `0x00500C80` — two frames — where it used to reach `0x005BFB40`
+in attract and `0x00501800` in game.
 
 ---
 
-## 3. Coins do not become credits
+## 3. Tilemap colour and the window layer — fixed
+
+Two bugs in model2recomp that between them hid most of what the game draws.
+
+**Palette entries are not colours.** They were expanded 5:5:5 straight to 8:8:8.
+Each 5-bit field selects one of 32 ramps in colour-translate RAM, and the
+tilemaps read those ramps at luma `0x40` before the gamma curve, as
+`model2_v.cpp`'s `screen_update` does. Skipping that ignored the game's own
+colour setup: on the warning screen every pen landed within a shade of white,
+so white text sat invisibly on a white background.
+
+**The window tilemap is not a layer.** The four tilemaps are two pairs, a
+"screen" half and a "window" half, and `segaic24.cpp`'s `draw_common` never
+touches the window half in normal mode — only a split selected by the pair's
+control word makes it draw, clipped to its own region. model2recomp drew it
+unconditionally, and Virtua Cop fills tilemap 1 with a single solid tile, so a
+flat fill covered the entire screen: text, 3D and all. That fill is what the
+"flat light grey" in front of the in-game 3D actually was.
+
+---
+
+## 4. Getting into a stage
+
+The game boots, runs its attract cycle, takes a coin and a start, draws the
+stage select, and plays: `MODEL2_INPUT=coin1,start1,fire` reaches the wharf in
+first person with the ammo HUD over it, about 1,500 polygons a field filling
+the screen.
+
+What is not verified is a whole stage. The headless input driver pulses
+buttons on a fixed schedule and the gun sits wherever it was left, so it cannot
+aim at a stage-select panel or shoot an enemy on purpose; and the field
+boundary is wall-clock driven, so two runs diverge. Playing properly needs a
+person at the mouse.
+
+The in-game colour translate is warm — red about 15/255 above green and blue,
+where attract writes the three channels equal. That is the game's own writes,
+not the renderer, but whether it is the intended grade or a fade caught
+part-way is not established.
+
+---
+
+## 5. Coins do not become credits
 
 The board defaults to **free play** without its settings EEPROM, so the game
 starts on Start alone and never needs a credit. Input itself works end to end:
@@ -106,7 +147,7 @@ settings area.
 
 ---
 
-## 4. No sound
+## 6. No sound
 
 **Symptom.** Silence.
 

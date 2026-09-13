@@ -29,9 +29,15 @@ this and the sibling recomp projects are developed in the open.
 
 ## Status
 
-**It boots, runs its own frame loop, and renders.** Attract mode draws the
-stage geometry with textures, perspective-correct mapping, z-sorting and the
-hardware's real colour path, with the tilemap HUD over it.
+**It boots, attracts, takes a coin, and plays.** Coin and Start reach the
+stage select, and from there the game runs a stage in first person: about
+1,500 polygons a field filling the screen, textured and z-sorted, with the
+ammo cylinder and credit HUD over it.
+
+![Stage one, in game](docs/ingame_stage1.png)
+
+*In game. The recompiled i960 runs the stage, the emulated MB86233 computes
+the matrices, and model2recomp's rasterizer draws it.*
 
 | | State |
 |---|---|
@@ -43,14 +49,21 @@ hardware's real colour path, with the tilemap HUD over it.
 | Tilemaps | Working — four System 24 layers, two passes around the 3D |
 | Math coprocessor | Working — MB86233 emulated, runs the game's microcode |
 | Input | **Working.** Mouse is the lightgun; coin, start, service and test reach the game |
-| Polygon colours | **Fixed** — the attract demo renders in full colour |
+| Polygon colours | **Fixed** — attract and in game both render in full colour |
+| Tilemap colours | **Fixed** — pens go through colour-translate RAM and gamma, as the hardware does |
 | Credits | The board defaults to **free play** without its settings EEPROM, so the game starts on Start alone |
-| **In-game 3D** | Past the stage select the scene only partly draws, leaving the tilemap clear showing — the open bug |
+| In-game 3D | **Working** — a stage draws in first person, the 3D covering the screen |
+| Guest stack | Balanced. `MODEL2_LEAK` reports nothing; high-water is two frames above the base on every path |
 | **Sound** | **Not implemented.** No 68000, no MultiPCM. |
 
-**It boots, attracts, takes a coin and starts a game.** The attract demo runs
-in full colour with the targeting reticle, and Start reaches the stage select.
-What is still wrong is the 3D once you are past the menu — see
+The attract demo runs in full colour with the targeting reticle and the
+enemies in it:
+
+![An enemy in the attract demo](docs/attract_enemy.png)
+
+What is *not* verified is playing a stage through to its end. The headless
+input driver pulses buttons on a schedule and cannot aim, so that needs a
+person at the mouse. There is still no sound. See
 [docs/technical/known-issues.md](docs/technical/known-issues.md).
 
 **The scenery used to draw black, and the cause was two bugs in function
