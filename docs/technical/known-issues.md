@@ -103,13 +103,18 @@ tilemaps read those ramps at luma `0x40` before the gamma curve, as
 colour setup: on the warning screen every pen landed within a shade of white,
 so white text sat invisibly on a white background.
 
-**The window tilemap is not a layer.** The four tilemaps are two pairs, a
-"screen" half and a "window" half, and `segaic24.cpp`'s `draw_common` never
-touches the window half in normal mode — only a split selected by the pair's
-control word makes it draw, clipped to its own region. model2recomp drew it
-unconditionally, and Virtua Cop fills tilemap 1 with a single solid tile, so a
-flat fill covered the entire screen: text, 3D and all. That fill is what the
-"flat light grey" in front of the in-game 3D actually was.
+**The window tilemap is the other half of a pair, not a layer.** The four
+tilemaps are two pairs, and the halves share the screen through a mask bitmap
+in tile RAM — one bit per 8-pixel block. The even half draws where a bit is
+clear, the odd half where it is set. model2recomp drew the odd half over the
+whole screen, and Virtua Cop fills tilemap 1 with a single solid tile, so a
+flat fill covered everything: text, 3D and all. That fill is what the "flat
+light grey" in front of the in-game 3D actually was.
+
+Virtua Cop leaves the mask zeroed, so its odd halves draw nothing — which is
+why simply skipping them looked right at first. The mask, the window/split
+modes and the negated horizontal scroll are all implemented now; none of them
+changes this game's output, and all three would matter for another.
 
 ---
 
