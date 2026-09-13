@@ -5,49 +5,45 @@ root cause; none are solved.
 
 ---
 
-## 1. Polygons draw too dark (mostly fixed)
+## 1. Polygons drew too dark — fixed
 
-**Was:** most scenery drew as solid black silhouettes.
+**Was:** most scenery drew as solid black silhouettes, and the game never got
+past its attract loop.
 
-**Cause, in full.** Three bugs in a chain, and the middle one was hiding the
-other two.
+**Cause.** Three bugs, and the middle one was hiding the other two.
 
-1. **Function discovery treated a `ret` as the end of a function.** A
-   conditional branch that skips over an early return leaves a `ret` in the
-   middle of a function; the code after it is a continuation, not an entry
-   point. Splitting there cut real functions in half - most visibly the printf
-   routine at `0x00074E20` - and left paths that fall off the end of their
-   generated C without reaching the `ret` that pops the frame.
-2. **Every such path leaked a stack frame**, about one per field. The guest
-   stack climbed sixty bytes a field.
-3. **The interrupt frame was unbalanced in the other direction.** The VBlank
-   handler is dispatched at the field boundary without the frame the hardware
-   pushes, so its `ret` unwinds one too far - which happened to cancel the leak
-   and hide it, while walking the frame pointer down out of work RAM instead.
+1. **A `ret` is not the end of a function.** A conditional branch that skips
+   over an early return leaves one in the middle; the code after it is a
+   continuation, not an entry point. Discovery split real functions there and
+   left paths that fall off the end of their generated C without reaching the
+   `ret` that pops the frame.
+2. **Switch jump tables were never discovered.** `ld table[gN*4], gM` followed
+   by `bx (gM)` dispatches through code addresses nothing else names, so the
+   dispatch missed, the switch did nothing, and the caller's frame leaked.
+3. **The interrupt frame was unbalanced the other way.** The VBlank handler was
+   dispatched without the frame the hardware pushes, so its `ret` unwound one
+   too far - which cancelled the two leaks above and hid them, while walking
+   the frame pointer down out of work RAM instead.
 
 With the frame pointer in ROM, `0x00009700` stored a zero to `0x44(fp)` and
 read back `0x000008A0` out of the i960 interrupt table. That denormal looked
 like a live palette fade; `0x00003B68` had no case for the uninitialised
 selector at `0x0050F360` and returned an index where a pointer belongs; and the
-fade copied 455 words from address 1 - the i960 boot header - straight into the
-polygon palette.
+fade copied 455 words from address 1 — the i960 boot header — into the polygon
+palette.
 
 ```
 [pal] 1000: 0000 0000 00B0 0000 0000 0000 05D0 0000 F980 FFFF ...
 ```
 
-**Fixed** by the discovery rule in [lifter.md](lifter.md): a post-`ret` address
-that something *branches* to is a label, not a function. The leak is gone, the
-stack high-water is back inside work RAM, the fade counter reads zero, and the
-scenery has its colours:
+**The trap was that fixing any one of the three alone made things worse**, which
+is why the interrupt frame looked for a long time like a change that broke
+rendering. Two errors were cancelling. Fixed together:
 
-![Attract mode with the palette intact](../attract_containers.png)
+![Virtua Cop's attract demo](../attract_wharf.png)
 
-**Still open.** Some surfaces remain dark, and the faithful interrupt models
-(`MODEL2_IRQMODE=1` or `2`) now get much further than they used to - far enough
-to show the Sega warning screen correctly - but stall there instead of
-continuing into the attract demo. The default mode reaches attract, so it is
-still the default.
+Function count went 2,095 → 1,559 with the first rule, then → 1,747 with the
+jump tables. Both live in [lifter.md](lifter.md).
 
 ---
 

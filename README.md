@@ -10,15 +10,15 @@ and a Lockheed-Martin-derived rasterizer, which together made it the
 best-looking thing in an arcade in 1994.
 
 This project takes the game's i960 program ROM, disassembles it, lifts all
-1,559 functions to C, and links the result against
+1,747 functions to C, and links the result against
 [**model2recomp**](https://github.com/sp00nznet/model2recomp) — the Model 2
 board as a native C library. The output is a Windows executable running
 Virtua Cop's own code on your CPU.
 
-![Virtua Cop attract mode running natively](docs/attract_3d.png)
+![Virtua Cop's attract demo running natively](docs/attract_wharf.png)
 
-*Attract mode, rendered natively. The recompiled i960 builds the display list,
-the emulated MB86233 coprocessor computes the matrices from microcode the game
+*The wharf, rendered natively. The recompiled i960 builds the display list, the
+emulated MB86233 coprocessor computes the matrices from microcode the game
 uploaded at boot, and model2recomp's geometry engine and rasterizer draw it —
 with the System 24 tilemap HUD composited on top.*
 
@@ -35,7 +35,7 @@ hardware's real colour path, with the tilemap HUD over it.
 
 | | State |
 |---|---|
-| i960 program lifted | **1,559 functions**, ~118,000 lines of generated C |
+| i960 program lifted | **1,747 functions**, ~120,000 lines of generated C |
 | Boot | Full chain: reset stub → IAC reinitialize → firmware entry → `main` |
 | Frame loop | The game's own, at its video-status busy-wait |
 | Interrupts | VBlank handler dispatched at the field boundary |
@@ -43,33 +43,24 @@ hardware's real colour path, with the tilemap HUD over it.
 | Tilemaps | Working — four System 24 layers, two passes around the 3D |
 | Math coprocessor | Working — MB86233 emulated, runs the game's microcode |
 | Input | **Working.** Mouse is the lightgun; coin, start, service and test reach the game |
-| Polygon colours | **Fixed** - see below. Some surfaces are still dark |
-| **Coins do not become credits** | The I/O board's settings EEPROM is not modelled |
+| Polygon colours | **Fixed** — the attract demo renders in full colour |
+| Credits | The board defaults to **free play** without its settings EEPROM, so the game starts on Start alone |
+| **In-game 3D** | Stage select and gameplay draw the HUD over a white screen — the open bug |
 | **Sound** | **Not implemented.** No 68000, no MultiPCM. |
 
-Not playable yet: coins reach the game but do not become credits, because the
-I/O board's settings EEPROM is not modelled. Everything measured is in
+**It boots, attracts, takes a coin and starts a game.** The attract demo runs
+in full colour with the targeting reticle, and Start reaches the stage select.
+What is still wrong is the 3D once you are past the menu — see
 [docs/technical/known-issues.md](docs/technical/known-issues.md).
 
-**The scenery used to draw black, and the cause was in function discovery.** A
-`ret` is not always the end of a function — a conditional branch that skips
-over an early return leaves one in the middle, and the code after it is a
-continuation. Treating it as an entry point sawed real functions in half and
-left paths that fall off the end without reaching the `ret` that pops the
-frame. One leaked frame per field was enough for the guest stack to climb into
-the relocated PRCB; the frame pointer went out of work RAM; the guest read ROM
-for a palette fade counter; and the bogus fade copied the i960 boot header over
-the polygon palette.
-
-The rule that fixes it is that a post-`ret` address something *branches* to is
-a label, not a function. It dropped the function count from 2,095 to 1,559 —
-those 536 were pieces of functions that had been cut in two — and the colours
-came back:
-
-![Attract mode with the palette intact](docs/attract_containers.png)
-
-Some surfaces are still dark, and the game's boot sequence now reaches the Sega
-warning screen. Written up in
+**The scenery used to draw black, and the cause was two bugs in function
+discovery cancelling a third in the interrupt frame.** A `ret` in the middle of
+a function is not its end, and a switch jump table's targets are named by
+nothing at all — both left frames unpopped, the guest stack climbed, and the
+unbalanced interrupt `ret` happened to pull it back down. Two errors cancelling
+is why fixing either one alone made things visibly worse. Fixed together, the
+palette stopped being corrupted and the game started running its own state
+machine. The whole chain is in
 [docs/technical/known-issues.md](docs/technical/known-issues.md).
 
 ### Where it came from
@@ -168,7 +159,7 @@ is in **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)**.
        |
        |  tools/i960_lifter.py   discover functions, lift i960 -> C
        v
-   src/recomp/*.c    1,559 functions, ~118K lines
+   src/recomp/*.c    1,747 functions, ~120K lines
        |
        |  MSVC / CMake
        v
@@ -192,7 +183,7 @@ virtuacop/
 │   └── functions.h           vcop_register_all()
 ├── src/
 │   ├── main/main.c           Entry point: init, ROM load, boot chain
-│   └── recomp/               Generated. 1,559 lifted functions + dispatch table
+│   └── recomp/               Generated. 1,747 lifted functions + dispatch table
 ├── tools/
 │   ├── rom_loader.py         ROM set -> flat images, plus an i960 disassembler
 │   └── i960_lifter.py        i960 machine code -> C

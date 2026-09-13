@@ -78,8 +78,8 @@ up.
 
 ## Step 3 (optional): Regenerate the recompiled C
 
-`src/recomp/` is already committed — 1,559 functions, about 118,000 lines of
-generated C across 8 files — so you can skip straight to building. Regenerate only if you
+`src/recomp/` is already committed — 1,747 functions, about 120,000 lines of
+generated C across 9 files — so you can skip straight to building. Regenerate only if you
 changed the lifter or you are on Revision A:
 
 ```bash
@@ -94,7 +94,7 @@ Program size: 484228 bytes
 Entry point: 0x000005D0
 Initial FP: 0x00500C00
 Discovering functions...
-Found 1559 functions
+Found 1747 functions
 Lifting functions to C...
 Generated 109020 lines of C code
 ```
@@ -190,17 +190,17 @@ be in different scenes. Sample rather than trusting a single frame.
 perspective-correct mapping, z-sorting, the sky and ground, and the tilemap HUD
 with "CREDIT 0" over the top.
 
-**You will not see:** everything correct. Some surfaces still render darker
-than they should. What was fixed, and what is left, is in
-[technical/known-issues.md](technical/known-issues.md).
+**You will not see:** the 3D past the stage select. Attract renders in full
+colour; once a game starts, the HUD draws over a white screen. That is the open
+bug in [technical/known-issues.md](technical/known-issues.md).
 
 **Controls:** the mouse is player 1's lightgun. Left button fires, right button
 fires off-screen (which is how this game reloads), middle button drops a coin.
 Keyboard: 5 coin, 1 start, 9 service, F2 test.
 
-**You cannot play yet.** The mouse aims and fires and the buttons reach the
-game, but coins do not become credits - the I/O board's settings EEPROM is not
-modelled. Also there is no sound.
+**You can start a game**, and the mouse aims and fires — but the 3D does not
+draw once you are past the stage select, and there is no sound. The board
+defaults to free play, because its settings EEPROM is not modelled.
 
 ## Troubleshooting
 

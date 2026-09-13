@@ -123,6 +123,29 @@ the target of a `cmpibne` a few instructions earlier. It is a label. Applying
 the rule dropped the function count from 2,095 to 1,559 — those 536 were all
 pieces of functions that had been sawn in half.
 
+### 4. Switch jump tables
+
+```
+ld   0x0001C918[g4*4], g4
+bx   (g4)
+```
+
+The entries are code addresses and **nothing else in the program names them**:
+no call, no branch, no relocation. Without harvesting the table they are never
+discovered, the dispatch misses at runtime, the entire switch does nothing, and
+the frame the caller allocated is never given back.
+
+The lifter watches for a `ld` with a 32-bit displacement and a scaled index
+followed by a `bx` on the same register, then reads entries out of the ROM
+image while they still look like code addresses in this program. The table is
+unbounded in the instruction stream — what limits it is a `cmpobl` a few
+instructions earlier — so the heuristic stops at the first entry that is not
+4-aligned and inside the program.
+
+That found 188 more functions, and unblocked the game's own state machine: the
+routine at `0x0001C8D0` dispatches on `0x0050F2D8` through exactly this shape,
+and until the table was harvested none of it ran.
+
 Function *ends* are implicit: each function runs to the start of the next
 discovered one.
 

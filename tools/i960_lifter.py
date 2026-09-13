@@ -664,6 +664,34 @@ def discover_functions(data, max_size):
     post_ret = set()
 
     branch_targets = set()
+    jump_targets = set()
+
+    def harvest_jump_table(table_addr):
+        """Read a switch dispatch table out of the ROM image.
+
+        "ld table[gN*4], gM" followed by "bx (gM)" is how the compiler writes a
+        switch. The entries are code addresses and nothing else in the program
+        names them, so without this they are never discovered: the dispatch
+        misses at runtime, the whole switch does nothing, and the frame the
+        caller allocated is never given back.
+
+        The table is unbounded here - the guard that limits it is a compare a
+        few instructions earlier - so take entries while they still look like
+        code addresses in this program and stop at the first that does not.
+        """
+        found = []
+        addr = table_addr
+        for _ in range(64):
+            if addr + 4 > max_size:
+                break
+            entry = struct.unpack_from('<I', data, addr)[0]
+            if entry & 3 or not (0x400 <= entry < max_size):
+                break
+            found.append(entry)
+            addr += 4
+        return found
+
+    pending_table = None   # (destination register, table address)
 
     offset = 0
     # Set once a ret is seen and cleared by the next real instruction, so that
@@ -690,6 +718,17 @@ def discover_functions(data, max_size):
             if op == 0x08 or 0x10 <= op <= 0x1F or 0x20 <= op <= 0x3F:
                 branch_targets.add(target)
 
+        # "ld <32-bit displacement>[reg*4], dst" primes a possible switch;
+        # a "bx (dst)" right after it confirms one.
+        if op == 0x90 and size == 8 and (word & 0x1000) and ((word >> 10) & 0xF) >= 0xC:
+            pending_table = ((word >> 19) & 0x1F,
+                             struct.unpack_from('<I', data, offset + 4)[0])
+        elif op == 0x84 and pending_table and ((word >> 14) & 0x1F) == pending_table[0]:
+            jump_targets.update(harvest_jump_table(pending_table[1]))
+            pending_table = None
+        elif op != 0x90:
+            pending_table = None
+
         is_padding = word == 0 or word == 0xFFFFFFFF
         if after_ret and not is_padding:
             post_ret.add(offset)
@@ -710,7 +749,8 @@ def discover_functions(data, max_size):
     # something *calls* is still a function, whichever else it is.
     post_ret -= branch_targets - calls
 
-    all_funcs = sorted(calls | post_ret | interrupt_handlers(data, max_size))
+    all_funcs = sorted(calls | post_ret | jump_targets |
+                       interrupt_handlers(data, max_size))
     valid = []
     for addr in all_funcs:
         if addr < max_size - 4:
