@@ -43,16 +43,51 @@ Polygons whose colorbase lands in that range select ramp 0 on every channel and
 draw black. The ones that survive - grass, sky, road - are the ones whose
 palette entries sit above `0x11C1`, where the bogus fade stopped writing.
 
-**Why it is not fixed.** Both faithful models of the interrupt frame - push one
-for the handler, or snapshot and restore the whole context - stop the game
-submitting *any* display list, permanently, from the first field. It is not
-stuck when they are used: it executes more distinct functions than the default
-does, so it gets further into its own logic and then fails somewhere else.
-`MODEL2_IRQMODE=0|1|2` selects between them, and the default is the one that
-draws.
+**Why it is not fixed, and what is underneath it.** Correct the interrupt frame
+- `MODEL2_IRQMODE=1` or `2` - and the game stops submitting anything worth
+drawing. Not because it is stuck: it publishes a display list every field from
+the start, the lists are just nearly empty, about 360 opcodes over 600 fields
+where the default reaches 3,877 the moment the attract demo begins.
 
-Finding what modes 1 and 2 expose is the next thing to do, and the highest
-value work left in the project.
+The reason is the same problem pointing the other way. With the frame
+corrected the stack stops collapsing and starts **climbing**, about sixty bytes
+a field:
+
+```
+[poly] f100 ... sp=00503640      [poly] f400 ... sp=005082C0
+[poly] f200 ... sp=00504FC0      [poly] f500 ... sp=00509C40
+```
+
+It reaches the relocated PRCB at `0x00501000` within fifty fields, the
+interrupt table above it, and then the game's own variables. The default mode's
+unbalanced `ret` had been cancelling a **real frame leak** by accident.
+
+`MODEL2_LEAK=1` names it:
+
+```
+[leak] 00074E20 left sp 00500600 -> 00500780
+```
+
+`0x00074E20` is inside the printf family. Its generated C opens with
+`I960_SP += 0x180` and then takes a branch the lifter turned into a tail call,
+because **function discovery split the real function in two**: the data table
+at `0x00074DE0` - a hex-digit table and the string `(nul)` - follows a `ret`,
+which is exactly what a function entry looks like. The path taken through the
+second half falls off the end without reaching a `ret`, so the `0x180` is never
+given back. See [lifter.md](lifter.md).
+
+So the order of work is: stop the leak, then correct the interrupt frame, then
+the palette stops being corrupted and the scenery has its colours. Two ways to
+stop the leak, both worth doing:
+
+- **Teach function discovery to recognise data.** Printable ASCII after a
+  `ret` is a cheap, strong signal that a candidate is a string table rather
+  than an entry point.
+- **Balance the frame at the call site,** which knows the depth it should
+  return to. This was tried and made things worse - the correction fires on
+  legitimately deeper returns, and `i960_do_ret` with an empty register cache
+  reads a frame out of memory that was never written - so it needs doing
+  carefully.
 
 ---
 

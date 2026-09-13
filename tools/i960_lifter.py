@@ -196,7 +196,11 @@ class I960Lifter:
             elif opcode == 0x09:  # call
                 self.call_targets.add(target)
                 lines.append(f'i960_do_call(0x{target:08X}, 0x{addr+4:08X});')
-                lines.append(f'func_table_call(0x{target:08X}); /* call 0x{target:08X} */')
+                # A call to a function that was never lifted must not leave the
+                # frame it just pushed behind: the callee's "ret" is what would
+                # have popped it, and there is no callee.
+                lines.append(f'if (!func_table_call(0x{target:08X})) i960_do_ret(); '
+                             f'/* call 0x{target:08X} */')
             elif opcode == 0x0A:  # ret
                 lines.append(f'i960_do_ret(); /* ret */')
                 lines.append(f'return;')
@@ -580,7 +584,7 @@ class I960Lifter:
                 lines.append(f'func_table_call({ea});')
             elif opcode == 0x86:  # callx (indirect call)
                 lines.append(f'i960_do_call({ea}, 0x{addr + inst_size:08X});')
-                lines.append(f'func_table_call({ea}); /* callx */')
+                lines.append(f'if (!func_table_call({ea})) i960_do_ret(); /* callx */')
             elif opcode == 0x88:  # ldos
                 lines.append(f'{reg} = op_ldos({ea}); /* ldos */')
             elif opcode == 0x8A:  # stos

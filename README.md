@@ -43,7 +43,7 @@ hardware's real colour path, with the tilemap HUD over it.
 | Tilemaps | Working — four System 24 layers, two passes around the 3D |
 | Math coprocessor | Working — MB86233 emulated, runs the game's microcode |
 | Input | **Working.** Mouse is the lightgun; coin, start, service and test reach the game |
-| **Polygons draw too dark** | **Cause found**, not fixed - the interrupt frame, see below |
+| **Polygons draw too dark** | **Cause found**, two bugs deep - see below |
 | **Coins do not become credits** | The I/O board's settings EEPROM is not modelled |
 | **Sound** | **Not implemented.** No 68000, no MultiPCM. |
 
@@ -51,13 +51,20 @@ Not playable yet: coins reach the game but do not become credits, because the
 I/O board's settings EEPROM is not modelled. Everything measured is in
 [docs/technical/known-issues.md](docs/technical/known-issues.md).
 
-**The black scenery has a cause.** The VBlank handler is dispatched without the
-stack frame the hardware pushes, so its `ret` unwinds one frame too far every
-field; within a few hundred fields the frame pointer leaves work RAM and the
-guest reads ROM for its stack temporaries. One of them is a palette fade
-counter, and the resulting bogus fade copies the i960 boot header over the
-polygon palette. Fixing the frame properly stops the game rendering at all, for
-reasons not yet found - that is the next thing to solve.
+**The black scenery has a cause, and it is two bugs deep.** The VBlank handler
+is dispatched without the stack frame the hardware pushes, so its `ret` unwinds
+one frame too far every field; the frame pointer leaves work RAM and the guest
+reads ROM for its stack temporaries. One of them is a palette fade counter, and
+the bogus fade that follows copies the i960 boot header over the polygon
+palette.
+
+Correcting the frame reveals the second bug: the stack then *climbs*, sixty
+bytes a field, into the relocated PRCB and the game's own variables. The
+unbalanced `ret` had been cancelling a real frame leak — one function
+(`0x00074E20`, in printf) that the lifter split in two, leaving a path that
+never reaches its `ret`. Stop the leak, then correct the frame, and the palette
+stops being corrupted. Written up in
+[docs/technical/known-issues.md](docs/technical/known-issues.md).
 
 ### Where it came from
 
