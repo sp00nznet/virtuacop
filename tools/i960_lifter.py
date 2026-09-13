@@ -690,6 +690,59 @@ def interrupt_handlers(data, max_size):
     return handlers
 
 
+def jump_table_landings(data, max_size, entries, tables):
+    """Branch targets inside a jump-table chain that leave their own function.
+
+    A switch dispatched through "bx" is one function whose blocks are not
+    contiguous: the case bodies sit wherever the compiler put them and branch
+    back into the middle of the dispatcher. Those landing sites are named by
+    no call and fall inside some other function's extent, so the branch lifts
+    as a dispatch that misses - control unwinds to the dispatcher's caller
+    without reaching its "ret", and the frame it allocated is never given
+    back. The printf at 0x00074E20 leaked 0x180 bytes every time the game
+    formatted a string; 0x00027860 leaks on the gameplay path, where the
+    stack only has about 2KB before it reaches the game's own variables.
+
+    Walk each table's case bodies and keep the branch targets that cross an
+    extent boundary. Doing this for *every* branch in the program instead was
+    measured and regresses everything - splitting a genuine function costs far
+    more than a leak does - but a jump-table chain really is one function.
+    """
+    from tools.rom_loader import disasm_one
+    import bisect
+    starts = sorted(entries)
+
+    def owner(addr):
+        i = bisect.bisect_right(starts, addr) - 1
+        return starts[i] if i >= 0 else None
+
+    found = set()
+    for bx_addr, table in tables:
+        seen = set()
+        work = list(table) + [bx_addr]
+        while work:
+            addr = work.pop()
+            if addr in seen or not (0 < addr < max_size):
+                continue
+            seen.add(addr)
+            if len(seen) > 6000:
+                break
+            _, size, _, _, target = disasm_one(data, addr, addr)
+            word = struct.unpack_from('<I', data, addr)[0]
+            op = (word >> 24) & 0xFF
+            if op == 0x0A:          # ret ends this path
+                continue
+            is_branch = op == 0x08 or 0x10 <= op <= 0x1F or 0x20 <= op <= 0x3F
+            if is_branch and target is not None and 0 < target < max_size:
+                if target not in entries and owner(addr) != owner(target):
+                    found.add(target)
+                work.append(target)
+            if op == 0x08 or op == 0x84:   # b and bx do not fall through
+                continue
+            work.append(addr + size)
+    return found
+
+
 def discover_functions(data, max_size):
     """Find all function entry points."""
     from tools.rom_loader import disasm_one
@@ -698,6 +751,7 @@ def discover_functions(data, max_size):
 
     branch_targets = set()
     jump_targets = set()
+    switch_tables = []
 
     def harvest_jump_table(table_addr):
         """Read a switch dispatch table out of the ROM image.
@@ -757,7 +811,9 @@ def discover_functions(data, max_size):
             pending_table = ((word >> 19) & 0x1F,
                              struct.unpack_from('<I', data, offset + 4)[0])
         elif op == 0x84 and pending_table and ((word >> 14) & 0x1F) == pending_table[0]:
-            jump_targets.update(harvest_jump_table(pending_table[1]))
+            entries_here = harvest_jump_table(pending_table[1])
+            jump_targets.update(entries_here)
+            switch_tables.append((offset, entries_here))
             pending_table = None
         elif op != 0x90:
             pending_table = None
@@ -782,23 +838,19 @@ def discover_functions(data, max_size):
     # something *calls* is still a function, whichever else it is.
     post_ret -= branch_targets - calls
 
-    # The printf at 0x00074E20 is one function whose blocks are not
-    # contiguous: it dispatches through a jump table into case bodies half the
-    # ROM away, and those branch back into the middle of it. Those landing
-    # sites are named by no call and sit inside another function's extent, so
-    # the branch is lifted as a dispatch that misses, control unwinds to
-    # printf's caller, and the 0x180-byte frame printf took is never given
-    # back. The game sprintfs its HUD text every field, so the guest stack
-    # climbs ~550 bytes a frame and has run off the end of work RAM by the
-    # time a game starts.
-    #
-    # Registering the four landing sites lets the chain run on to the real
-    # "ret". Doing this program-wide instead regresses everything - splitting
-    # a genuine function costs far more than a leak does.
-    printf_landings = {0x00074E44, 0x00074E5C, 0x00074E88, 0x00075890}
+    candidates = (calls | post_ret | jump_targets |
+                  interrupt_handlers(data, max_size))
 
-    all_funcs = sorted(calls | post_ret | jump_targets | printf_landings |
-                       interrupt_handlers(data, max_size))
+    # Adding entries moves extent boundaries, which can expose another
+    # crossing; it settles in three rounds.
+    for _ in range(8):
+        landings = jump_table_landings(data, max_size, candidates, switch_tables)
+        landings -= candidates
+        if not landings:
+            break
+        candidates |= landings
+
+    all_funcs = sorted(candidates)
     valid = []
     for addr in all_funcs:
         if addr < max_size - 4:
