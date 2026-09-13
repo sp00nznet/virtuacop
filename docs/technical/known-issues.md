@@ -201,11 +201,35 @@ board, not the game.
 
 ---
 
+## What "incomplete geometry" turned out to be
+
+Scenes looked like they had holes in them, and the holes were the texture bug
+above: an edge texel smeared across a whole surface reads as a missing face,
+and a minified texture aliasing into noise reads as broken geometry.
+
+The polygon pipeline was checked against MAME line by line afterwards and
+matches:
+
+| | |
+|---|---|
+| `check_culling` | identical — double-side bit, link type 0, master z clip, `max_z < 0` |
+| `clip_polygon` | identical, including the NaN guard on both dot products |
+| Clip loop | four planes, 8-vertex buffers, result taken from `verts_out` — identical |
+| Polygon pool | 32768, the same as MAME's `MAX_POLYGONS`; the busiest field seen used 1,846 |
+| Draw order | nearest bucket first, first writer wins — MAME's `fillmap` |
+
+What has *not* been diffed against MAME is the stage upstream of that: the
+transform, the lighting and normal handling, and the display-list parsing. If
+something turns out to be genuinely missing rather than mis-textured, that is
+where to look next.
+
+---
+
 ## Smaller things
 
-- **Texture filtering.** Point sampling only. No bilinear, no mipmaps, no
-  microtexture blending. Texture LOD is computed per polygon and then not used.
-  Lives in model2recomp.
+- **Per-line tilemap scroll.** When bit 15 of a tilemap's horizontal scroll
+  register is set the value comes from a per-scanline table at `0x4000`.
+  Virtua Cop never sets it. Lives in model2recomp.
 - **Performance.** A few frames per second in busy scenes. The rasterizer is a
   straightforward barycentric fill over each triangle's bounding box with no
   optimisation. The coprocessor is *not* the bottleneck — about 5,800 DSP
