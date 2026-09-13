@@ -135,9 +135,15 @@ checkerboard stipple.
 
 The attract frame goes from about 220 distinct colours to 500.
 
-What is still missing is the filtering: point sampling, no bilinear, no
-mipmaps, no microtexture. Without mipmaps a minified texture aliases, so
-ground planes and distant walls are noisier than the hardware's.
+**The filtering followed.** Bilinear, mipmaps chosen from the depth, trilinear
+blending between levels and the microtexture below level 0 - `model2rd.ipp`'s
+texel path in full. This was not cosmetic: Virtua Cop's ground planes and
+distant walls are almost entirely minified, so without mipmaps they aliased
+into noise, which is easy to mistake for broken geometry.
+
+The attract frame went from about 220 distinct colours before any of this to
+745 after all of it, and the sign over the wharf reads "WHARF AM2 /
+INTERNATIONAL TRADING / IMPORT & EXPORT ZONE".
 
 ---
 
