@@ -124,8 +124,8 @@ cd virtuacop
 # 1. Turn your ROM set into the flat images the runtime loads
 python tools/rom_loader.py vcop.zip roms
 
-# 2. Generate the recompiled C from the program ROM
-#    (already committed - only needed if you change the lifter)
+# 2. Lift the program ROM into C. Not distributed - you generate it,
+#    from your own dump, into a gitignored directory.
 python -m tools.i960_lifter roms/program.bin src/recomp
 
 # 3. Build
@@ -196,15 +196,16 @@ virtuacop/
 │   └── functions.h           vcop_register_all()
 ├── src/
 │   ├── main/main.c           Entry point: init, ROM load, boot chain
-│   └── recomp/               Generated. 1,747 lifted functions + dispatch table
+│   └── recomp/               Generated locally, gitignored. 1,747 functions
 ├── tools/
 │   ├── rom_loader.py         ROM set -> flat images, plus an i960 disassembler
 │   └── i960_lifter.py        i960 machine code -> C
 └── docs/                     Getting started + technical notes
 ```
 
-`src/recomp/` is generated but **committed**, so the repository builds without
-Python and so that hand-applied fixes are reviewable in diffs.
+`src/recomp/` is **not distributed**. It is generated from your own dump by
+step 2 above and is gitignored, so the build needs Python once. The lifter
+ships; its output never does.
 
 ## Documentation
 
@@ -262,13 +263,13 @@ tables. Without it nothing rotates.
 
 ## Legal
 
-This repository contains **recompilation tooling and generated code only**. No
+This repository contains **recompilation tooling only**. No
 copyrighted ROM data, no game assets, no Sega code is included or
 redistributed. You must supply your own legally obtained ROM dump.
 
-The generated C in `src/recomp/` is a mechanical translation of the game's
-machine code and is only useful with a ROM dump you already have — it is not
-a substitute for owning the game.
+The C in `src/recomp/` is a mechanical translation of the game's machine code.
+It is generated on your machine from your own dump and is never committed or
+published here.
 
 Virtua Cop and Model 2 are trademarks of Sega. This project is not affiliated
 with or endorsed by Sega.

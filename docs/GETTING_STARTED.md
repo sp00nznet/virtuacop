@@ -71,16 +71,15 @@ nonsense z values.
 ### Revision A
 
 `tools/rom_loader.py` takes whichever of the two program ROM revisions the ZIP
-actually contains, so `vcopa.zip` works the same way. The committed C in
-`src/recomp/` was generated from **Revision B**, so a Revision A dump needs
-step 3 — the two revisions differ in two chips and the addresses do not line
-up.
+actually contains, so `vcopa.zip` works the same way. The lifter works from
+whichever you dumped — the two revisions differ in two chips and the addresses
+do not line up, so the C is only valid for the dump it came from.
 
-## Step 3 (optional): Regenerate the recompiled C
+## Step 3: Lift the program ROM into C
 
-`src/recomp/` is already committed — 1,747 functions, about 120,000 lines of
-generated C across 9 files — so you can skip straight to building. Regenerate only if you
-changed the lifter or you are on Revision A:
+`src/recomp/` is not distributed. Nothing derived from the game binary is in
+this repository; you generate it from your own dump, and it lands in a
+gitignored directory:
 
 ```bash
 python -m tools.i960_lifter roms/program.bin src/recomp

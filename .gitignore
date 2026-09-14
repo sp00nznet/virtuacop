@@ -14,7 +14,10 @@ CMakeSettings.json
 out/
 __pycache__/
 
-# ROM dumps and anything derived from them. Never committed.
+# ROM dumps and anything derived from them. Never committed. The lifter ships;
+# its output does not - you supply a dump, run tools/i960_lifter.py, and the
+# generated tree lands in src/recomp/ untracked.
+/src/recomp/
 roms/
 *.zip
 *.bin
