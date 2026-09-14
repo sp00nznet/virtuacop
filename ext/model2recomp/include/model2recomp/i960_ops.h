@@ -1,8 +1,10 @@
 /*
- * Virtua Cop - i960 instruction operation macros.
+ * i960KB instruction semantics, as macros.
  *
- * These macros translate i960 instructions to C operations.
- * Used by the recompiled code in src/recomp/.
+ * The generated C the lifter emits is a sequence of calls to these: one per
+ * guest instruction, all operating on the global g_i960 context. The i960 is
+ * the Model 2's CPU, so this is board-level - every game built on
+ * model2recomp includes this same header.
  *
  * The i960KB instruction set includes:
  *   - REG operations (add, sub, mul, div, and, or, xor, shifts)
@@ -14,8 +16,8 @@
  * All operations work on the global g_i960 context.
  */
 
-#ifndef VCOP_I960_OPS_H
-#define VCOP_I960_OPS_H
+#ifndef MODEL2RECOMP_I960_OPS_H
+#define MODEL2RECOMP_I960_OPS_H
 
 #include "model2recomp/i960.h"
 #include "model2recomp/bus.h"
@@ -373,4 +375,4 @@ static inline uint32_t op_testle(void) { return i960_test_cc(COND_LE) ? 1 : 0; }
 static inline uint32_t op_testg(void)  { return i960_test_cc(COND_G)  ? 1 : 0; }
 static inline uint32_t op_testge(void) { return i960_test_cc(COND_GE) ? 1 : 0; }
 
-#endif /* VCOP_I960_OPS_H */
+#endif /* MODEL2RECOMP_I960_OPS_H */

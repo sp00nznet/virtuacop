@@ -82,7 +82,7 @@ this repository; you generate it from your own dump, and it lands in a
 gitignored directory:
 
 ```bash
-python -m tools.i960_lifter roms/program.bin src/recomp
+python ext/model2recomp/tools/i960_lifter.py roms/program.bin src/recomp vcop
 ```
 
 Run it from the repository root (it imports `tools.rom_loader` for the

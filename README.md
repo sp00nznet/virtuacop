@@ -126,7 +126,7 @@ python tools/rom_loader.py vcop.zip roms
 
 # 2. Lift the program ROM into C. Not distributed - you generate it,
 #    from your own dump, into a gitignored directory.
-python -m tools.i960_lifter roms/program.bin src/recomp
+python ext/model2recomp/tools/i960_lifter.py roms/program.bin src/recomp vcop
 
 # 3. Build
 cmake -B build -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake \
@@ -170,7 +170,7 @@ is in **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)**.
        v
    roms/program.bin  data.bin  polygons.bin  textures.bin  copro_tables.bin
        |
-       |  tools/i960_lifter.py   discover functions, lift i960 -> C
+       |  ext/model2recomp/tools/i960_lifter.py  discover, lift i960 -> C
        v
    src/recomp/*.c    1,747 functions, ~120K lines
        |
@@ -198,8 +198,9 @@ virtuacop/
 │   ├── main/main.c           Entry point: init, ROM load, boot chain
 │   └── recomp/               Generated locally, gitignored. 1,747 functions
 ├── tools/
-│   ├── rom_loader.py         ROM set -> flat images, plus an i960 disassembler
-│   └── i960_lifter.py        i960 machine code -> C
+│   ├── rom_loader.py         Virtua Cop's ROM set -> the flat images
+│   ├── check_decode_vs_ida.py  Cross-check the disassembler against IDA
+│   └── mame/                 Diff our display list and frames against MAME
 └── docs/                     Getting started + technical notes
 ```
 

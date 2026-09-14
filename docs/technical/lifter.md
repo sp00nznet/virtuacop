@@ -1,12 +1,12 @@
 # The i960 Lifter
 
-`tools/i960_lifter.py` turns Virtua Cop's i960 program ROM into C. It is about
+`ext/model2recomp/tools/i960_lifter.py` turns Virtua Cop's i960 program ROM into C. It is about
 800 lines and there is nothing clever in it — which is the point. What matters
 is getting the instruction decode exactly right, because every mistake there
 produces a program that *runs* and quietly computes the wrong thing.
 
 ```bash
-python -m tools.i960_lifter roms/program.bin src/recomp
+python ext/model2recomp/tools/i960_lifter.py roms/program.bin src/recomp vcop
 ```
 
 Run it from the repository root; it imports `tools.rom_loader` for the

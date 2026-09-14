@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
 """
-i960 Static Recompiler (Lifter)
+i960 static recompiler (lifter).
 
-Reads an i960 program binary and generates C code that performs
-the equivalent operations using the model2recomp i960_ops.h macros.
+Reads an i960KB program binary and generates C that performs the equivalent
+operations against model2recomp's runtime, one C function per discovered guest
+function, dispatched through the function table.
+
+The i960 is the Model 2's CPU, so this is board-level and shared by every game
+built on model2recomp. The <prefix> argument names the game: it becomes the
+function prefix, the file names, and the include directory the generated C
+reaches into for that game's functions.h. (i960_ops.h is board-level and
+comes from model2recomp.)
 
 Usage:
-    python i960_lifter.py <program.bin> <output_dir>
+    python i960_lifter.py <program.bin> <output_dir> <prefix>
+
+    python ext/model2recomp/tools/i960_lifter.py roms/program.bin src/recomp vcop
 """
 
 import glob
@@ -751,7 +760,7 @@ def interrupt_handlers(data, max_size):
 
 def discover_functions(data, max_size):
     """Find all function entry points."""
-    from tools.rom_loader import disasm_one
+    from i960_disasm import disasm_one
     calls = set()
     post_ret = set()
 
@@ -855,16 +864,20 @@ def discover_functions(data, max_size):
 
 
 def main():
-    if len(sys.argv) < 3:
-        print(f"Usage: {sys.argv[0]} <program.bin> <output_dir>")
+    if len(sys.argv) < 4:
+        print(f"Usage: {sys.argv[0]} <program.bin> <output_dir> <prefix>")
+        print("  prefix names the game: 'vcop' emits vcop_XXXXXXXX() into")
+        print("  vcop_code_NNN.c and vcop_register_all(), and includes \"vcop/functions.h\".")
         sys.exit(1)
 
     prog_path = sys.argv[1]
     output_dir = sys.argv[2]
+    prefix = sys.argv[3]
+    guard = prefix.upper()
     os.makedirs(output_dir, exist_ok=True)
     # Stale output from a run that produced more files is still globbed by
     # CMake, and every function in it is defined twice.
-    for stale in glob.glob(os.path.join(output_dir, 'vcop_code_*.c')):
+    for stale in glob.glob(os.path.join(output_dir, f'{prefix}_code_*.c')):
         os.remove(stale)
 
     with open(prog_path, 'rb') as f:
@@ -920,13 +933,13 @@ def main():
     all_func_addrs = sorted(lifter.functions.keys())
 
     # Write header with all declarations
-    header_path = os.path.join(output_dir, 'vcop_funcs.h')
+    header_path = os.path.join(output_dir, f'{prefix}_funcs.h')
     with open(header_path, 'w') as f:
-        f.write('/* Auto-generated - Virtua Cop recompiled function declarations */\n')
-        f.write('#ifndef VCOP_FUNCS_H\n#define VCOP_FUNCS_H\n\n')
-        f.write('#include "vcop/functions.h"\n\n')
+        f.write(f'/* Auto-generated - {prefix} recompiled function declarations */\n')
+        f.write(f'#ifndef {guard}_FUNCS_H\n#define {guard}_FUNCS_H\n\n')
+        f.write(f'#include "{prefix}/functions.h"\n\n')
         for addr in all_func_addrs:
-            f.write(f'void vcop_{addr:08X}(void);\n')
+            f.write(f'void {prefix}_{addr:08X}(void);\n')
         f.write('\n#endif\n')
     print(f'Wrote {header_path} ({len(all_func_addrs)} declarations)')
 
@@ -934,20 +947,20 @@ def main():
     for addr in all_func_addrs:
         if funcs_in_file == 0:
             current_file_lines = []
-            current_file_lines.append('/* Auto-generated - Virtua Cop recompiled i960 code */\n')
-            current_file_lines.append('#include "vcop/i960_ops.h"\n')
-            current_file_lines.append('#include "vcop_funcs.h"\n\n')
+            current_file_lines.append(f'/* Auto-generated - {prefix} recompiled i960 code */\n')
+            current_file_lines.append('#include "model2recomp/i960_ops.h"\n')
+            current_file_lines.append(f'#include "{prefix}_funcs.h"\n\n')
 
         lines = lifter.functions[addr]
         current_file_lines.append(f'/* Function at 0x{addr:08X} */\n')
-        current_file_lines.append(f'void vcop_{addr:08X}(void)\n{{\n')
+        current_file_lines.append(f'void {prefix}_{addr:08X}(void)\n{{\n')
         for line in lines:
             current_file_lines.append(f'{line}\n')
         current_file_lines.append('}\n\n')
         funcs_in_file += 1
 
         if funcs_in_file >= FUNCS_PER_FILE or addr == all_func_addrs[-1]:
-            file_path = os.path.join(output_dir, f'vcop_code_{file_idx:03d}.c')
+            file_path = os.path.join(output_dir, f'{prefix}_code_{file_idx:03d}.c')
             with open(file_path, 'w') as f:
                 f.writelines(current_file_lines)
             print(f'Wrote {file_path} ({funcs_in_file} functions)')
@@ -955,14 +968,14 @@ def main():
             funcs_in_file = 0
 
     # Write registration function
-    reg_path = os.path.join(output_dir, 'vcop_register.c')
+    reg_path = os.path.join(output_dir, f'{prefix}_register.c')
     with open(reg_path, 'w') as f:
-        f.write('/* Auto-generated - Virtua Cop function registration */\n')
-        f.write('#include "vcop/functions.h"\n')
-        f.write('#include "vcop_funcs.h"\n\n')
-        f.write('void vcop_register_all(void)\n{\n')
+        f.write(f'/* Auto-generated - {prefix} function registration */\n')
+        f.write(f'#include "{prefix}/functions.h"\n')
+        f.write(f'#include "{prefix}_funcs.h"\n\n')
+        f.write(f'void {prefix}_register_all(void)\n{{\n')
         for addr in all_func_addrs:
-            f.write(f'    func_table_register(0x{addr:08X}, vcop_{addr:08X});\n')
+            f.write(f'    func_table_register(0x{addr:08X}, {prefix}_{addr:08X});\n')
         f.write('}\n')
     print(f'Wrote {reg_path} ({len(all_func_addrs)} registrations)')
 
