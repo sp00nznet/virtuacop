@@ -15,7 +15,9 @@ add_subdirectory(ext/model2recomp)
 
 # --- Recompiled game code library ---
 # Collect all generated recomp source files
-file(GLOB VCOP_RECOMP_SOURCES src/recomp/vcop_code_*.c)
+# CONFIGURE_DEPENDS: the lifter can emit a different number of files than the
+# last run did, and a stale glob links against declarations with no bodies.
+file(GLOB VCOP_RECOMP_SOURCES CONFIGURE_DEPENDS src/recomp/vcop_code_*.c)
 
 add_library(vcop_game STATIC
     src/recomp/vcop_register.c
