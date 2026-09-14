@@ -298,39 +298,81 @@ CTRL_OPS = {
 }
 
 # REG format opcodes (bits 31-24 + bits 11-7 for extended)
+# REG format opcodes, keyed by (opcode, extension).
+#
+# Taken from MAME's cpu/i960/i960.cpp, which is what the lifter follows, and
+# cross-checked against IDA's i960 module over this ROM: of the 66 encodings
+# that actually appear, the two agree on every one.
+#
+# The earlier table here was written from the i960 manual's layout and named a
+# dozen encodings wrongly - mulo read as addino, movl as scanbit, movr as
+# cvtir, cmpr as movr - which made roms/disasm.txt actively misleading.
 REG_OPS = {
-    (0x58, 0x00): 'notbit',   (0x58, 0x01): 'and',      (0x58, 0x02): 'andnot',
-    (0x58, 0x03): 'setbit',   (0x58, 0x04): 'notand',   (0x58, 0x06): 'xor',
-    (0x58, 0x07): 'or',       (0x58, 0x08): 'nor',      (0x58, 0x09): 'xnor',
-    (0x58, 0x0A): 'not',      (0x58, 0x0B): 'ornot',    (0x58, 0x0C): 'clrbit',
-    (0x58, 0x0D): 'notor',    (0x58, 0x0E): 'nand',     (0x58, 0x0F): 'alterbit',
-    (0x59, 0x00): 'addo',     (0x59, 0x01): 'addi',     (0x59, 0x02): 'subo',
-    (0x59, 0x03): 'subi',     (0x59, 0x08): 'shro',     (0x59, 0x0A): 'shrdi',
-    (0x59, 0x0B): 'shri',     (0x59, 0x0C): 'shlo',     (0x59, 0x0D): 'rotate',
+    (0x58, 0x00): 'notbit', (0x58, 0x01): 'and', (0x58, 0x02): 'andnot',
+    (0x58, 0x03): 'setbit', (0x58, 0x04): 'notand', (0x58, 0x06): 'xor',
+    (0x58, 0x07): 'or', (0x58, 0x08): 'nor', (0x58, 0x09): 'xnor',
+    (0x58, 0x0A): 'not', (0x58, 0x0B): 'ornot', (0x58, 0x0C): 'clrbit',
+    (0x58, 0x0D): 'notor', (0x58, 0x0E): 'nand', (0x58, 0x0F): 'alterbit',
+    (0x59, 0x00): 'addo', (0x59, 0x01): 'addi', (0x59, 0x02): 'subo',
+    (0x59, 0x03): 'subi', (0x59, 0x08): 'shro', (0x59, 0x0A): 'shrdi',
+    (0x59, 0x0B): 'shri', (0x59, 0x0C): 'shlo', (0x59, 0x0D): 'rotate',
     (0x59, 0x0E): 'shli',
-    (0x5A, 0x00): 'cmpo',     (0x5A, 0x01): 'cmpi',     (0x5A, 0x02): 'concmpo',
-    (0x5A, 0x03): 'concmpi',  (0x5A, 0x04): 'cmpinco',  (0x5A, 0x05): 'cmpinci',
-    (0x5A, 0x06): 'cmpdeco',  (0x5A, 0x07): 'cmpdeci',
-    (0x5C, 0x00): 'mov',      (0x5C, 0x08): 'lda',
-    (0x5D, 0x0C): 'scanbit',  (0x5D, 0x0E): 'spanbit',
-    (0x60, 0x05): 'modac',
-    (0x64, 0x00): 'modi',
-    (0x65, 0x00): 'remo',     (0x65, 0x01): 'remi',
-    (0x66, 0x00): 'divo',     (0x66, 0x01): 'divi',
-    (0x67, 0x00): 'mulo',     (0x67, 0x01): 'muli',
-    (0x70, 0x00): 'addono',   (0x70, 0x01): 'addino',   (0x70, 0x02): 'subono',
-    (0x70, 0x03): 'subino',
-    # Floating point
-    (0x68, 0x01): 'addr',     (0x68, 0x05): 'movr',
-    (0x69, 0x01): 'subr',     (0x69, 0x05): 'mulr',
-    (0x6A, 0x01): 'divr',
-    (0x6C, 0x09): 'cvtir',    (0x6C, 0x03): 'cvtri',
-    (0x6E, 0x01): 'cmpr',     (0x6E, 0x05): 'cmpor',
-    # Test
-    (0x5F, 0x00): 'testno',   (0x5F, 0x01): 'testg',    (0x5F, 0x02): 'teste',
-    (0x5F, 0x03): 'testge',   (0x5F, 0x04): 'testl',    (0x5F, 0x05): 'testne',
-    (0x5F, 0x06): 'testle',   (0x5F, 0x07): 'testo',
+    (0x5A, 0x00): 'cmpo', (0x5A, 0x01): 'cmpi', (0x5A, 0x02): 'concmpo',
+    (0x5A, 0x03): 'concmpi', (0x5A, 0x04): 'cmpinco',
+    (0x5A, 0x05): 'cmpinci', (0x5A, 0x06): 'cmpdeco',
+    (0x5A, 0x07): 'cmpdeci', (0x5A, 0x0C): 'scanbyte',
+    (0x5A, 0x0E): 'chkbit',
+    (0x5B, 0x00): 'addc', (0x5B, 0x02): 'subc',
+    (0x5C, 0x0C): 'mov',
+    (0x5D, 0x0C): 'movl',
+    (0x5E, 0x0C): 'movt',
+    (0x5F, 0x0C): 'movq',
+    (0x60, 0x00): 'synmov', (0x60, 0x02): 'synmovq',
+    (0x64, 0x00): 'spanbit', (0x64, 0x01): 'scanbit', (0x64, 0x04): 'dmovt',
+    (0x64, 0x05): 'modac',
+    (0x65, 0x05): 'modpc',
+    (0x66, 0x00): 'calls', (0x66, 0x0D): 'flushreg',
+    (0x67, 0x00): 'emul', (0x67, 0x01): 'ediv', (0x67, 0x04): 'cvtir',
+    (0x67, 0x05): 'cvtilr', (0x67, 0x06): 'scalerl', (0x67, 0x07): 'scaler',
+    (0x68, 0x00): 'atanr', (0x68, 0x01): 'logepr', (0x68, 0x02): 'logr',
+    (0x68, 0x03): 'remr', (0x68, 0x05): 'cmpr', (0x68, 0x08): 'sqrtr',
+    (0x68, 0x09): 'expr', (0x68, 0x0A): 'logbnr', (0x68, 0x0B): 'roundr',
+    (0x68, 0x0C): 'sinr', (0x68, 0x0D): 'cosr', (0x68, 0x0E): 'tanr',
+    (0x69, 0x00): 'atanrl', (0x69, 0x02): 'logrl', (0x69, 0x05): 'cmprl',
+    (0x69, 0x08): 'sqrtrl', (0x69, 0x09): 'exprl', (0x69, 0x0A): 'logbnrl',
+    (0x69, 0x0B): 'roundrl', (0x69, 0x0C): 'sinrl', (0x69, 0x0D): 'cosrl',
+    (0x69, 0x0E): 'tanrl',
+    (0x6C, 0x00): 'cvtri', (0x6C, 0x01): 'cvtril', (0x6C, 0x02): 'cvtzri',
+    (0x6C, 0x03): 'cvtzril', (0x6C, 0x09): 'movr',
+    (0x6D, 0x09): 'movrl',
+    (0x6E, 0x01): 'movre', (0x6E, 0x02): 'cpysre',
+    (0x70, 0x01): 'mulo', (0x70, 0x08): 'remo', (0x70, 0x0B): 'divo',
+    (0x74, 0x01): 'muli', (0x74, 0x08): 'remi', (0x74, 0x0B): 'divi',
+    (0x78, 0x0B): 'divr', (0x78, 0x0C): 'mulr', (0x78, 0x0D): 'subr',
+    (0x78, 0x0F): 'addr',
+    (0x79, 0x0B): 'divrl', (0x79, 0x0C): 'mulrl', (0x79, 0x0D): 'subrl',
+    (0x79, 0x0F): 'addrl',
 }
+
+# How many operands each REG instruction prints. Anything not listed takes the
+# full src1, src2, dst.
+ONE_SRC_OPS = {
+    'not', 'mov', 'movl', 'movt', 'movq', 'movr', 'movrl', 'movre',
+    'scanbit', 'spanbit', 'cvtir', 'cvtilr', 'cvtri', 'cvtril',
+    'cvtzri', 'cvtzril', 'sqrtr', 'sqrtrl', 'sinr', 'sinrl',
+    'cosr', 'cosrl', 'tanr', 'tanrl', 'expr', 'exprl',
+    'logbnr', 'logbnrl', 'roundr', 'roundrl', 'classr', 'classrl',
+    'testno', 'testg', 'teste', 'testge', 'testl', 'testne', 'testle',
+    'testo',
+}
+
+COMPARE_OPS = {
+    'cmpo', 'cmpi', 'concmpo', 'concmpi', 'cmpr', 'cmprl',
+    'cmpor', 'cmporl', 'chkbit', 'scanbyte',
+}
+
+NO_OPERAND_OPS = {'flushreg', 'fmark', 'mark', 'syncf', 'faultno'}
+
 
 # COBR format opcodes
 COBR_OPS = {
@@ -410,9 +452,13 @@ def disasm_one(data, offset, addr):
         src1 = word & 0x1F
         src2 = (word >> 14) & 0x1F
         dst = (word >> 19) & 0x1F
-        m1 = (word >> 5) & 1  # src1 is literal if set
-        m2 = (word >> 12) & 1
-        m3 = (word >> 13) & 1  # dst mode
+        # Operand modes. src1's literal flag is bit 11, not bit 5 - reading
+        # the wrong bit prints "subo sp, g4, g4" where the instruction is
+        # "subo 1, g4, g4", because r1 is named sp. The lifter had the same
+        # bug once and it corrupted every REG instruction with a literal.
+        m1 = (word >> 11) & 1   # src1 is a 5-bit literal if set
+        m2 = (word >> 12) & 1   # src2 is a 5-bit literal if set
+        m3 = (word >> 13) & 1   # destination is a floating-point register
 
         mnem = REG_OPS.get((opcode, ext), f'reg_{opcode:02X}_{ext:X}')
 
@@ -420,17 +466,14 @@ def disasm_one(data, offset, addr):
         src2_str = f'{src2}' if m2 else REG_NAMES.get(src2, f'r{src2}')
         dst_str = REG_NAMES.get(dst, f'r{dst}')
 
-        # Determine number of operands
-        if mnem in ('not', 'mov', 'movr', 'scanbit', 'spanbit',
-                     'testno', 'testg', 'teste', 'testge', 'testl', 'testne', 'testle', 'testo',
-                     'cvtir', 'cvtri'):
+        # Operand count follows the instruction, not the format.
+        if mnem in ONE_SRC_OPS:
             return (f'{mnem} {src1_str}, {dst_str}', 4, False, False, None)
-        elif mnem in ('cmpo', 'cmpi', 'concmpo', 'concmpi', 'cmpr', 'cmpor'):
+        if mnem in COMPARE_OPS:
             return (f'{mnem} {src1_str}, {src2_str}', 4, False, False, None)
-        elif mnem == 'modac':
-            return (f'{mnem} {src1_str}, {src2_str}, {dst_str}', 4, False, False, None)
-        else:
-            return (f'{mnem} {src1_str}, {src2_str}, {dst_str}', 4, False, False, None)
+        if mnem in NO_OPERAND_OPS:
+            return (mnem, 4, False, False, None)
+        return (f'{mnem} {src1_str}, {src2_str}, {dst_str}', 4, False, False, None)
 
     # MEM format (opcodes 0x80-0xCF)
     if 0x80 <= opcode <= 0xCF:
