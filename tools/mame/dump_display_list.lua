@@ -44,6 +44,11 @@ emu.register_frame(function()
     for i = 0, 8191 do
         put(mem:read_u32(0x00900000 + ((start + i * 4) & 0x1FFFC)))
     end
+    -- Layer 0's name table too. On a screen with no 3D the display list sits
+    -- idle and matches every other idle frame; the text on screen does not.
+    for a = 0, 0x1FFC, 4 do
+        put(mem:read_u32(0x01000000 + a))
+    end
     fh:close()
 
     manager.machine.video:snapshot()

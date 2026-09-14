@@ -33,6 +33,7 @@ and `path.<field>.buf` together.
 
 ## Lining the two up
 
+
 Our field counter is **not** the game's frame number. The field boundary sits
 inside the guest's busy-wait on the video status register, which it polls a
 varying number of times per frame, so the same field number lands on different
@@ -41,6 +42,12 @@ match on the *active* part of the list, from `geo_read_start_address` for the
 length of the stream. Most of the 128KB is static (MAME fills it with
 `0x07800f0f` at reset) so comparing the whole region matches everything
 against everything.
+
+The list alone is still not enough. On a screen with no 3D on it - the warning
+notice, the ranking table - the display list sits idle, so it matches every
+other idle frame and the "best match" it reports is meaningless. Both sides
+therefore append layer 0's name table, which is the text on screen, and the
+two together identify a moment.
 
 ## What this found
 

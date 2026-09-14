@@ -41,20 +41,29 @@ except ImportError:
 
 
 def load_list(path):
-    """(read address, tuple of dwords) for one captured display list."""
-    data = open(path, 'rb').read()
-    n = len(data) // 4
-    words = struct.unpack('<%dI' % n, data[:n * 4])
-    return words[0], words[1:]
+    """(read address, array of dwords) for one captured display list."""
+    data = np.frombuffer(open(path, 'rb').read(), dtype='<u4')
+    if data.size == 0:
+        return 0, data
+    return int(data[0]), data[1:]
 
 
-def list_distance(a, b):
-    """Dwords differing between two lists, over the shorter of the two."""
-    wa, wb = a[1], b[1]
-    n = min(len(wa), len(wb))
-    if n == 0:
-        return 1 << 30
-    return sum(1 for i in range(n) if wa[i] != wb[i])
+def best_match(our_list, mame_arrays, mame_frames):
+    """The MAME frame whose list is closest, and how many dwords differ.
+
+    Vectorised: comparing every one of our frames against every one of MAME's
+    a dword at a time in Python takes minutes for a few dozen frames each.
+    """
+    wa = our_list[1]
+    best_frame, best_dist = None, None
+    for frame, wb in zip(mame_frames, mame_arrays):
+        n = min(wa.size, wb.size)
+        if n == 0:
+            continue
+        d = int(np.count_nonzero(wa[:n] != wb[:n]))
+        if best_dist is None or d < best_dist:
+            best_frame, best_dist = frame, d
+    return best_frame, best_dist
 
 
 def as_rgb(path):
@@ -104,11 +113,10 @@ def main():
     worst = []
     for field in sorted(ours):
         (our_list, ppm) = ours[field]
-        best_frame, best_dist = None, None
-        for frame, ml in mame_lists.items():
-            d = list_distance(our_list, ml)
-            if best_dist is None or d < best_dist:
-                best_frame, best_dist = frame, d
+        best_frame, best_dist = best_match(
+            our_list,
+            [mame_lists[f][1] for f in frames_in_order],
+            frames_in_order)
 
         if best_frame not in mame_png:
             continue
