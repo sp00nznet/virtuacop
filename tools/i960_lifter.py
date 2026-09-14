@@ -549,6 +549,18 @@ class I960Lifter:
                 lines.append(f_dst(f_src(src1_reg, m1, True), True) + ' /* movrl */')
             elif key == (0x6E, 0x01):
                 lines.append(f_dst(f_src(src1_reg, m1, True), True) + ' /* movre (as long real) */')
+            elif key == (0x6E, 0x02):
+                # cpysre: src1's magnitude with src2's sign, long real.
+                a = f_src(src1_reg, m1, True)
+                b = f_src(src2_reg, m2, True)
+                lines.append(f_dst(f'(({b}) >= 0.0 ? fabs({a}) : -fabs({a}))', True)
+                             + ' /* cpysre */')
+
+            elif key == (0x66, 0x0D):
+                # flushreg writes the register cache out to the stack frames.
+                # i960_do_call and i960_do_ret already keep that coherent, so
+                # there is nothing to flush.
+                lines.append(f'/* flushreg - register cache is already coherent */')
 
             # ---- 0x70: mulo, remo, divo ----
             elif key == (0x70, 0x01):  lines.append(f'{dst} = {src1} * {src2}; /* mulo */')
