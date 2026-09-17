@@ -41,7 +41,7 @@ the matrices, and model2recomp's rasterizer draws it.*
 
 | | State |
 |---|---|
-| i960 program lifted | **1,747 functions**, ~120,000 lines of generated C |
+| i960 program lifted | **2,300 functions**, ~112,000 lines of generated C |
 | Boot | Full chain: reset stub → IAC reinitialize → firmware entry → `main` |
 | Frame loop | The game's own, at its video-status busy-wait |
 | Interrupts | VBlank handler dispatched at the field boundary |
@@ -55,6 +55,16 @@ the matrices, and model2recomp's rasterizer draws it.*
 | In-game 3D | **Working** — a stage draws in first person, the 3D covering the screen |
 | Guest stack | Balanced. `MODEL2_LEAK` reports nothing; high-water is two frames above the base on every path |
 | **Sound** | **Not implemented.** No 68000, no MultiPCM. |
+
+Several i960 semantics bugs were found and fixed while getting Daytona USA to
+boot on the same library, and they apply here too: `movl`/`movt`/`movq`
+ignoring the operand-mode bit that makes the source a literal, unaligned word
+accesses being masked to the word below rather than split the way the hardware
+splits them, `modi`, and — the largest — `callx` computing its target after
+allocating the register frame, which clears r3-r15, so every indirect call
+through a local register went to address zero. Virtua Cop renders the same
+frame before and after all of them; it simply does not lean on those paths the
+way Daytona does.
 
 The attract demo runs in full colour with the targeting reticle and the
 enemies in it:
